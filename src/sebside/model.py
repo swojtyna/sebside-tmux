@@ -26,6 +26,7 @@ OPTION_STATE = "@sebside_state"
 OPTION_ROLE = "@sebside_role"
 OPTION_RESUMED = "@sebside_resumed"  # session option: sebside resumed this session from a closed card
 SIDEBAR_ROLE = "sidebar"
+OPTION_SHARED_WIDTH = "@sebside_shared_width"  # global: the width every sidebar follows; a drag of one sets it
 
 
 @dataclass(frozen=True, slots=True)

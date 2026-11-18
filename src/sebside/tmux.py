@@ -8,7 +8,9 @@ Safety rules, enforced before any process starts:
   `sebside open` alone gets `OPEN_EXTRA` (one `split-window` that starts the sidebar program in a new pane).
 - `set-option` only touches pane-scoped `@sebside_*` options and never with `-F`. Exceptions: `remain-on-exit off`
   on a pane (a resumed program's pane and the sidebar's own pane close when their program exits) and the session
-  marker `@sebside_resumed 1` on a session sebside has just resumed (its sidebar sends the client back on close).
+  marker `@sebside_resumed 1` on a session sebside has just resumed (its sidebar sends the client back on close),
+  and the global `@sebside_shared_width <columns>` (one width for every sidebar).
+- `resize-pane` only as `-t %N -x <columns>`: a sidebar follows the shared width with its own pane.
 - `display-message` only with `-p` (print to stdout, nothing shown in a client).
 - An argument ending in `;` is refused, because tmux would read it as a second command.
 - `new-session` is used for exactly one thing: resuming a closed card as an argv list (no shell), detached.
@@ -25,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from .errors import ForbiddenCommand
-from .model import OPTION_ID, OPTION_RESUMED, OPTION_ROLE, SIDEBAR_ROLE, Pane, Server
+from .model import OPTION_ID, OPTION_RESUMED, OPTION_ROLE, OPTION_SHARED_WIDTH, SIDEBAR_ROLE, Pane, Server
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -40,6 +42,7 @@ ALLOWED: frozenset[str] = frozenset(
         "select-window",  # Enter: show the card's window
         "select-pane",  # Enter: focus the card's pane
         "new-session",  # Enter on a closed card: run its resume argv, detached
+        "resize-pane",  # -t %N -x N only: the sidebar follows the shared width
     }
 )
 UNINSTALL_EXTRA: frozenset[str] = frozenset({"set-hook", "list-keys", "unbind-key", "kill-pane"})
@@ -119,6 +122,8 @@ def check_command(subcommand: str, arguments: tuple[str, ...], allowed: frozense
         raise ForbiddenCommand("display-message only with -p")
     if subcommand == "set-option":
         _check_set_option(arguments)
+    if subcommand == "resize-pane":
+        _check_resize_pane(arguments)
     if subcommand == "new-session":
         if "--" not in arguments:
             raise ForbiddenCommand("new-session only with an argv after --")
@@ -144,10 +149,20 @@ def _check_split_window(arguments: tuple[str, ...]) -> None:
         raise ForbiddenCommand("split-window only with -t and exactly one command (the sidebar program)")
 
 
+def _check_resize_pane(arguments: tuple[str, ...]) -> None:
+    flags, positional = split_flags(arguments, frozenset({"-t", "-x"}))
+    target = arguments[arguments.index("-t") + 1] if "-t" in arguments[:-1] else ""
+    columns = arguments[arguments.index("-x") + 1] if "-x" in arguments[:-1] else ""
+    if sorted(flags) != ["-t", "-x"] or positional or not PANE_ID.match(target) or not columns.isdigit():
+        raise ForbiddenCommand("resize-pane only as -t %N -x <columns>")
+
+
 def _check_set_option(arguments: tuple[str, ...]) -> None:
     flags, positional = split_flags(arguments)
     if positional == [OPTION_RESUMED, "1"] and flags == ["-t"]:
         return  # session marker of a session sebside has just resumed
+    if flags == ["-g"] and len(positional) == 2 and positional[0] == OPTION_SHARED_WIDTH and positional[1].isdigit():
+        return  # the one global sebside writes: the width every sidebar follows
     if "-p" not in flags:
         raise ForbiddenCommand("set-option only with -p (pane scope)")
     if any(flag not in ("-p", "-u", "-q", "-t") for flag in flags):

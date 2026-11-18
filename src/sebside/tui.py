@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from .cards import Board, build, newly_seen, reconcile, server_of
 from .errors import SebsideError
 from .log import logger
-from .model import OPTION_ROLE, SIDEBAR_ROLE, Card, Meter, Pane, State
+from .model import OPTION_ROLE, OPTION_SHARED_WIDTH, SIDEBAR_ROLE, Card, Meter, Pane, State
 from .render import Row, clean, frame_layout, to_ansi
 
 if TYPE_CHECKING:
@@ -417,6 +417,38 @@ def paint(rows: list[Row]) -> str:
 
 
 @dataclass
+@dataclass
+class WidthSync:
+    """One width for every sidebar: a sidebar the user resized publishes its width in OPTION_SHARED_WIDTH, the others
+    resize their own pane to it on their next poll. A change that follows our own resize request (also one tmux
+    clamped in a narrow window) is ours, not the user's, so it is never published."""
+
+    last: int | None = None
+    requested: int | None = None
+    tried_for: int | None = None
+
+    def tick(self, tmux: TmuxLike, pane: str, columns: int) -> None:
+        if not pane:
+            return
+        raw = tmux.option(OPTION_SHARED_WIDTH)
+        shared = int(raw) if raw.isdigit() else None
+        if columns == self.last and self.requested is not None:
+            self.requested = None   # the resize changed nothing (already at tmux's limit): the next change is the user's
+        if self.last is None or columns != self.last:
+            first, ours = self.last is None, self.requested is not None
+            self.last, self.requested = columns, None
+            if ours:
+                return
+            if not first or shared is None:
+                if shared != columns:
+                    tmux.run("set-option", "-g", OPTION_SHARED_WIDTH, str(columns))
+                self.tried_for = columns
+                return
+        if shared is not None and shared != columns and self.tried_for != shared:
+            self.requested = self.tried_for = shared
+            tmux.run("resize-pane", "-t", pane, "-x", str(shared))
+
+
 class _Resized:
     flag: bool = True
 
@@ -458,6 +490,7 @@ def _run(app: App, own_pane: str | None) -> int:
     pending = ""
     previous_term = signal.signal(signal.SIGTERM, _exit_on_signal)
     watch = CodeWatch()
+    widths = WidthSync()
     try:
         tty.setcbreak(fd)
         out.write("\x1b[?1049h\x1b[?25l\x1b[2J" + MOUSE_ON)
@@ -469,6 +502,7 @@ def _run(app: App, own_pane: str | None) -> int:
                 last_poll, last_stamp = time.monotonic(), app.store.dir_stamp()
                 if app.alone():
                     return 0
+                widths.tick(app.tmux, app.own_pane, terminal_size(fd, app.config.width)[0])
             if watch.changed(time.monotonic()):
                 app.reload = True
                 return 0

@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- One sidebar width everywhere: resizing one sidebar resizes the others (and new ones open at that width),
+  kept in the global option `@sebside_shared_width`.
 - `sebside meter set --label L --percent N [--note TEXT]` / `sebside meter clear`: one usage meter under the
   counter (`label ████░░ N%` and the note below), e.g. a weekly limit. Hidden once older than `stale_hours`.
 

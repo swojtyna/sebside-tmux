@@ -21,7 +21,7 @@ from .cards import build, reconcile, server_of
 from .config import SORTS, Config, config_path, load_from_env
 from .errors import EXIT_OK, SebsideError, StateError, TmuxError, UsageError
 from .log import logger, setup
-from .model import OPTION_ID, OPTION_ROLE, OPTION_STATE, SIDEBAR_ROLE, CardRecord, Meter, State, TmuxRef, parse_state
+from .model import OPTION_ID, OPTION_ROLE, OPTION_SHARED_WIDTH, OPTION_STATE, SIDEBAR_ROLE, CardRecord, Meter, State, TmuxRef, parse_state
 from .render import clean
 from .store import Store
 from .tmux import FIELD_SEP, OWN_HOOKS, PANE_ID, Tmux, format_field, server_from_env

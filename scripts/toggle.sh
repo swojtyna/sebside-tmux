@@ -22,7 +22,8 @@ if [ -n "$existing" ]; then
     exit 0
 fi
 
-width="$(tmux show-option -gqv @sebside-width)"
+width="$(tmux show-option -gqv @sebside_shared_width)"   # the width the open sidebars share
+width="${width:-$(tmux show-option -gqv @sebside-width)}"
 width="${width:-$("$sebside" config get width 2>/dev/null || echo 36)}"
 case "$width" in
     ''|*[!0-9%]*|*%*%*|%*) width=36 ;;   # only "36" or "25%" are valid

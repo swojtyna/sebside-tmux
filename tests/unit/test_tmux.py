@@ -29,6 +29,7 @@ def test_allowlist_is_exactly_read_navigate_resume_and_own_options():
         "select-window",
         "select-pane",
         "new-session",
+        "resize-pane",  # own pane only, to follow the shared width
     } == ALLOWED
     assert {"set-hook", "list-keys", "unbind-key", "kill-pane"} == UNINSTALL_EXTRA
     assert not ALLOWED & UNINSTALL_EXTRA
