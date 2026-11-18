@@ -17,7 +17,8 @@ sebside keeps a narrow pane on the left with one card per session or task:
 - **done** (green ✔) means finished; it turns quiet once you have looked at it.
 - **quiet** (grey ○) and **unknown** (grey ?) show their state in the bar and icon only; the text of a live card is
   never dimmed.
-- Recently closed cards stay at the bottom, dimmed and greyed, and can be resumed with Enter.
+- Recently closed cards stay at the bottom, dimmed and greyed, and can be resumed with Enter. The `✕` at the right
+  end of their first line (or `x` / Delete) forgets one.
 
 It works with plain tmux out of the box (session name, directory, current command, last activity). Any program can
 make its card richer with one command: `sebside card set --id build --state working --desc "compiling"`.
@@ -254,8 +255,7 @@ pane, and `sebside uninstall` removes sebside's own hooks, key and sidebar panes
 override them per state in `[colors]`.
 
 **Does it support the mouse?** Yes. Click a card to select it and jump to it (same as Enter), and use the wheel to
-move the selection. Clicks on empty rows, the footer or the "recently closed" header do nothing, and while a resume
-confirmation or the explain view is open clicks are ignored, so a click never starts a resume. It needs tmux
+move the selection. Clicks on empty rows, the footer or the "recently closed" header do nothing, and while the explain view is open clicks are ignored, so a click never starts a resume (in the confirmation a click cancels it). It needs tmux
 `set -g mouse on`. Sidebars that were already running pick it up after a restart.
 
 **Which card is my session?** The card of the session this sidebar sits in has a bold `●` at the right end of its

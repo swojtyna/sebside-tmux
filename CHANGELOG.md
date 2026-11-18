@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A clickable `✕` at the right edge of every recently closed card, and the `x` / Delete key, forget that card (its own
+  card file only, after the same ownership checks as resume). Live cards are never removed.
+- In the resume confirmation any mouse click cancels (Esc/click); only Enter or `y` runs the resume.
+
 ### Changed
 
 - Live cards never have dimmed text: the state shows only in the bar colour and the icon. Only recently closed cards

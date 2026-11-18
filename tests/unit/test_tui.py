@@ -27,6 +27,7 @@ def test_decode_keys():
         "explain",
         "quit",
         "esc",
+        "forget",
         "yes",
     ]
     assert decode_keys("\x1bOA") == ["up"]
@@ -256,11 +257,11 @@ def _three_cards(server: FakeTmuxServer, app: App) -> None:
 
 
 def test_decode_sgr_mouse_reports():
-    assert decode_keys("\x1b[<0;5;3M") == ["click:2"]
+    assert decode_keys("\x1b[<0;5;3M") == ["click:2:4"]
     assert decode_keys("\x1b[<64;5;3M\x1b[<65;5;3M") == ["up", "down"]
     assert decode_keys("\x1b[<0;5;3m") == []  # release
     assert decode_keys("\x1b[<2;5;3M\x1b[<32;5;3M") == []  # right button, drag
-    assert decode_keys("j\x1b[<0;12;10Mk") == ["down", "click:9", "up"]
+    assert decode_keys("j\x1b[<0;12;10Mk") == ["down", "click:9:11", "up"]
 
 
 def test_cut_mouse_report_stays_pending():
@@ -314,9 +315,8 @@ def test_click_on_closed_card_asks_first_and_clicks_never_confirm(server, app, s
     app.handle_key(f"click:{row}")
     assert app.mode == "confirm" and app.selected_key == "closed:c1"
     app.rows(36, 40)
-    for index in range(40):
-        app.handle_key(f"click:{index}")
-    assert app.mode == "confirm" and "new-session" not in server.commands()
+    app.handle_key("click:0:0")  # any click cancels, it never runs the resume
+    assert app.mode == "list" and "new-session" not in server.commands()
 
 
 def test_wheel_moves_the_selection(server, app):
@@ -338,11 +338,11 @@ def test_current_session_comes_from_the_own_pane(server, app):
 
 
 def test_mouse_modifier_bits_do_not_hide_the_button():
-    assert decode_keys("\x1b[<4;5;3M") == ["click:2"]  # shift
-    assert decode_keys("\x1b[<16;5;3M") == ["click:2"]  # ctrl
+    assert decode_keys("\x1b[<4;5;3M") == ["click:2:4"]  # shift
+    assert decode_keys("\x1b[<16;5;3M") == ["click:2:4"]  # ctrl
     assert decode_keys("\x1b[<68;5;3M") == ["up"]
     assert decode_keys("\x1b[<32;5;3M\x1b[<35;5;3M") == []  # motion
-    assert decode_keys("\x1b[<0;5;3M\x1b[<0;5;3m") == ["click:2"]  # press and release in one read
+    assert decode_keys("\x1b[<0;5;3M\x1b[<0;5;3m") == ["click:2:4"]  # press and release in one read
 
 
 def test_code_watch_reloads_only_after_a_stable_change():
@@ -371,3 +371,45 @@ def test_code_fingerprint_follows_file_changes(tmp_path: Path):
     (tmp_path / "m.py").write_text("xyz")
     assert before is not None and code_fingerprint(tmp_path) != before
     assert code_fingerprint(tmp_path / "missing") == ()
+
+
+def _closed_rows(server, app, store):
+    _closed_app(server, app, store, ("agent",))
+    app.selected_key = "pane:%2"
+    app.rows(36, 40)
+    return app.row_keys.index("closed:c1")
+
+
+def test_closed_card_shows_a_cross_on_its_first_line_only(server, app, store):
+    row = _closed_rows(server, app, store)
+    painted = [to_plain(r) for r in app.rows(36, 40)]
+    assert painted[row].rstrip().endswith("✕") and "✕" not in "".join(painted[:row] + painted[row + 1 :])
+    assert app.row_forgets[row] and not any(app.row_forgets[:row])
+
+
+def test_click_on_the_cross_forgets_the_closed_card(server, app, store):
+    row = _closed_rows(server, app, store)
+    app.handle_key(f"click:{row}:34")
+    assert store.load("c1") is None and app.mode == "list"
+    assert "closed:c1" not in [card.key for card in app.board.cards]
+    assert app.selected_key is not None
+
+
+def test_click_left_of_the_cross_still_asks_to_resume(server, app, store):
+    row = _closed_rows(server, app, store)
+    app.handle_key(f"click:{row}:10")
+    assert app.mode == "confirm" and store.load("c1") is not None
+
+
+def test_x_key_forgets_selected_closed_card_but_never_a_live_one(server, app, store):
+    _closed_rows(server, app, store)
+    app.handle_key("forget")  # live card selected
+    assert store.load("c1") is not None
+    app.selected_key = "closed:c1"
+    app.handle_key("forget")
+    assert store.load("c1") is None
+
+
+def test_store_forget_refuses_open_cards(store):
+    store.write(record("open1"))
+    assert store.forget("open1")[0] is False and store.load("open1") is not None

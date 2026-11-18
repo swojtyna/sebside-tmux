@@ -27,7 +27,7 @@ from .cards import Board, build, newly_seen, reconcile, server_of
 from .errors import SebsideError
 from .log import logger
 from .model import OPTION_ROLE, SIDEBAR_ROLE, Card, Pane, State
-from .render import Row, clean, frame_layout, to_ansi
+from .render import FORGET_COLUMNS, Row, clean, frame_layout, to_ansi
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,6 +53,8 @@ KEY_ALIASES: dict[str, str] = {
     "?": "explain",
     "q": "quit",
     "\x03": "quit",
+    "x": "forget",
+    "\x1b[3~": "forget",
     "g": "top",
     "G": "bottom",
 }
@@ -66,13 +68,13 @@ WHEEL = {64: "up", 65: "down"}
 
 
 def decode_mouse(token: str) -> str | None:
-    """An SGR mouse report -> "up"/"down" (wheel) or "click:<screen row, 0-based>" (left press); else None."""
+    """An SGR mouse report -> "up"/"down" (wheel) or "click:<row>:<column>" (left press, 0-based); else None."""
     match = MOUSE_REPORT.fullmatch(token)
     if match is None or match.group(4) != "M":
         return None
     button = int(match.group(1)) & ~MODIFIER_BITS  # shift/meta/ctrl do not change which button it was
     if button == 0:
-        return f"{CLICK}{int(match.group(3)) - 1}"
+        return f"{CLICK}{int(match.group(3)) - 1}:{int(match.group(2)) - 1}"
     return WHEEL.get(button)
 
 
@@ -121,6 +123,8 @@ class App:
     reload: bool = False  # the installed code changed: restart this process once the terminal is restored
     companion_seen: bool = False  # a non-sidebar pane has shared this window with us at least once
     row_keys: list[str | None] = field(default_factory=list)  # card key under each screen row, as last painted
+    row_forgets: list[bool] = field(default_factory=list)  # rows that carry a ✕, as last painted
+    row_width: int = 0
 
     # data --------------------------------------------------------------------------------------------
     def refresh(self) -> None:
@@ -180,7 +184,8 @@ class App:
         if key == "quit":
             return False
         if key.startswith(CLICK):
-            self._click(int(key.removeprefix(CLICK)))
+            row, _, column = key.removeprefix(CLICK).partition(":")
+            self._click(int(row), int(column) if column else None)
             return True
         self.message = ""
         if self.mode == "confirm":
@@ -193,17 +198,43 @@ class App:
             self.mode = "explain"
         elif key in ("up", "down", "top", "bottom"):
             self._move(key)
+        elif key == "forget":
+            self.forget_selected()
         elif key == "enter":
             self.activate()
         return True
 
-    def _click(self, row: int) -> None:
-        """Select and activate the card under a screen row. Only in the list: a click never confirms a resume."""
+    def _click(self, row: int, column: int | None = None) -> None:
+        """A click cancels the resume confirmation. In the list it hits the ✕ of a closed card (forget it) or selects
+        and activates the card under the row. A click never confirms a resume."""
+        if self.mode == "confirm":
+            self.mode, self.message = "list", ""
+            return
         if self.mode != "list" or not 0 <= row < len(self.row_keys) or self.row_keys[row] is None:
             return
         self.message = ""
         self.selected_key = self.row_keys[row]
-        self.activate()
+        on_forget = column is not None and self.row_forgets[row] and column >= self.row_width - FORGET_COLUMNS
+        if on_forget:
+            self.forget_selected()
+        else:
+            self.activate()
+
+    def forget_selected(self) -> None:
+        """Drop the selected closed card from the history (its own card file only); the selection stays nearby."""
+        card = self.selected
+        if card is None or card.live:
+            return
+        keys = [other.key for other in self.board.cards]
+        index = keys.index(card.key)
+        done, reason = self.store.forget(card.card_id)
+        if not done:
+            self.message = f"cannot forget: {clean(reason)}"
+            return
+        self.refresh()
+        keys = [other.key for other in self.board.cards]
+        if keys:
+            self.selected_key = keys[min(index, len(keys) - 1)]
 
     def _move(self, key: str) -> None:
         keys = [card.key for card in self.board.cards]
@@ -286,7 +317,8 @@ class App:
 
     # drawing -----------------------------------------------------------------------------------------
     def rows(self, width: int, height: int, frame: int = 0) -> list[Row]:
-        rows, self.row_keys = frame_layout(
+        self.row_width = width
+        rows, self.row_keys, self.row_forgets = frame_layout(
             self.board,
             self.selected_key,
             width,
@@ -460,7 +492,7 @@ def _run(app: App, own_pane: str | None) -> int:
             for key in decode_keys(complete):
                 if not app.handle_key(key):
                     return 0
-                if key in ("enter", "yes") or key.startswith(CLICK):
+                if key in ("enter", "yes", "forget") or key.startswith(CLICK):
                     last_poll = 0.0  # show the effect at once
     except KeyboardInterrupt:
         return 0

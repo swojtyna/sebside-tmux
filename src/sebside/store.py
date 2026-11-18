@@ -300,6 +300,18 @@ class Store:
                 return False
             return True
 
+    def forget(self, card_id: str) -> tuple[bool, str]:
+        """Delete one closed card of ours (same trust checks as `load_trusted`); live cards are never removed."""
+        with self.locked():
+            record, reason = self.load_trusted(card_id)
+            if record is None:
+                return False, reason
+            if not record.closed or record.readonly:
+                return False, "only closed cards can be forgotten"
+            with contextlib.suppress(FileNotFoundError):
+                self.path(card_id).unlink()
+        return True, ""
+
     def close(self, card_ids: list[str], now: float, expected: Mapping[str, int] | None = None) -> list[str]:
         """Mark open cards closed. Readonly cards are left alone. With `expected` (id -> rev seen when the decision
         was made), a card that `card set` changed in the meantime is not closed."""
