@@ -47,7 +47,7 @@ missing, the plugin shows a message with the install command.
 ## Quick start
 
 1. Press `prefix + S` (by default `Ctrl-b S`). The sidebar opens on the left of the current window.
-2. `↑`/`↓` (or `j`/`k`) select a card, `Enter` switches to that session.
+2. `↑`/`↓` (or `j`/`k`, or the mouse wheel) select a card, `Enter` (or a left click on the card) switches to that session.
 3. `Ctrl-b →` moves to your session, `Ctrl-b ←` back to the sidebar. `q` closes it, so does `prefix + S` again.
 4. `?` explains where the selected card's state came from (tmux basics or a card file, and how old it is).
 
@@ -252,7 +252,13 @@ pane, and `sebside uninstall` removes sebside's own hooks, key and sidebar panes
 **The colors look wrong.** sebside uses your terminal's 16 ANSI colors. Change them in your terminal theme, or
 override them per state in `[colors]`.
 
-**Does it support the mouse?** Not in 0.1. Keyboard only.
+**Does it support the mouse?** Yes. Click a card to select it and jump to it (same as Enter), and use the wheel to
+move the selection. Clicks on empty rows, the footer or the "recently closed" header do nothing, and while a resume
+confirmation or the explain view is open clicks are ignored, so a click never starts a resume. It needs tmux
+`set -g mouse on`. Sidebars that were already running pick it up after a restart.
+
+**Which card is my session?** The card of the session this sidebar sits in has a bold `●` at the right end of its
+second line, in the card's state colour. It is separate from the selection, which only moves with keys or the mouse.
 
 **Where is my data?** Only in `~/.local/state/sebside/cards/` and in your tmux pane options. Nothing leaves your
 machine.

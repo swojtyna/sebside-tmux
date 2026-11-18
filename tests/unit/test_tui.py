@@ -9,7 +9,7 @@ from sebside.model import OPTION_ID, State
 from sebside.render import to_plain
 from sebside.store import Store
 from sebside.tmux import Tmux
-from sebside.tui import App, decode_keys, paint, session_name
+from sebside.tui import App, decode_keys, paint, session_name, split_pending
 
 
 @pytest.fixture
@@ -247,3 +247,127 @@ def test_unknown_own_pane_never_closes(server, app):
     server.panes.remove(main)
     app.refresh()
     assert app.alone() is False
+
+
+# mouse -------------------------------------------------------------------------------------------
+def _three_cards(server: FakeTmuxServer, app: App) -> None:
+    server.panes += [FakePane("%1", "a"), FakePane("%2", "b"), FakePane("%3", "c")]
+    app.refresh()
+
+
+def test_decode_sgr_mouse_reports():
+    assert decode_keys("\x1b[<0;5;3M") == ["click:2"]
+    assert decode_keys("\x1b[<64;5;3M\x1b[<65;5;3M") == ["up", "down"]
+    assert decode_keys("\x1b[<0;5;3m") == []  # release
+    assert decode_keys("\x1b[<2;5;3M\x1b[<32;5;3M") == []  # right button, drag
+    assert decode_keys("j\x1b[<0;12;10Mk") == ["down", "click:9", "up"]
+
+
+def test_cut_mouse_report_stays_pending():
+    assert split_pending("j\x1b[<0;5") == ("j", "\x1b[<0;5")
+    assert split_pending("\x1b[<") == ("", "\x1b[<")
+    assert split_pending("\x1b[<0;5;3M") == ("\x1b[<0;5;3M", "")
+
+
+def test_click_selects_and_activates_the_card_under_the_row(server, app):
+    _three_cards(server, app)
+    app.rows(36, 40)
+    app.handle_key("click:5")  # second card spans rows 4-7
+    assert app.selected_key == "pane:%2"
+    assert server.commands()[-3:] == ["switch-client", "select-window", "select-pane"]
+    assert app.message == "showing b"
+
+
+def test_click_respects_scroll_offset_and_multi_row_cards(server, app):
+    _three_cards(server, app)
+    app.selected_key = "pane:%3"
+    app.rows(36, 12)  # room for 8 body rows: scrolled so rows 0-3 are card b, rows 4-7 card c
+    assert app.row_keys[:8] == ["pane:%2"] * 4 + ["pane:%3"] * 4
+    app.handle_key("click:3")  # the rule line of card b
+    assert app.selected_key == "pane:%2"
+
+
+def test_click_on_footer_and_empty_rows_does_nothing(server, app):
+    _three_cards(server, app)
+    app.rows(36, 40)
+    before = len(server.calls)
+    for row in (12, 30, 39, 99, -1):
+        app.handle_key(f"click:{row}")
+    assert app.selected_key == "pane:%1" and len(server.calls) == before
+
+
+def test_click_on_recently_closed_header_does_nothing(server, app, store):
+    _closed_app(server, app, store, ("agent",))
+    app.selected_key = "pane:%2"
+    app.rows(36, 40)
+    header = app.row_keys.index("closed:c1") - 1
+    assert app.row_keys[header] is None
+    app.handle_key(f"click:{header}")
+    assert app.selected_key == "pane:%2" and app.mode == "list"
+
+
+def test_click_on_closed_card_asks_first_and_clicks_never_confirm(server, app, store):
+    _closed_app(server, app, store, ("agent", "--resume", "c1"))
+    app.selected_key = "pane:%2"
+    app.rows(36, 40)
+    row = app.row_keys.index("closed:c1")
+    app.handle_key(f"click:{row}")
+    assert app.mode == "confirm" and app.selected_key == "closed:c1"
+    app.rows(36, 40)
+    for index in range(40):
+        app.handle_key(f"click:{index}")
+    assert app.mode == "confirm" and "new-session" not in server.commands()
+
+
+def test_wheel_moves_the_selection(server, app):
+    _three_cards(server, app)
+    app.handle_key("down")
+    assert app.selected_key == "pane:%2"
+    app.handle_key("up")
+    assert app.selected_key == "pane:%1"
+
+
+def test_current_session_comes_from_the_own_pane(server, app):
+    server.panes += [FakePane("%1", "a"), FakePane("%2", "b")]
+    assert app.current_session is None
+    app.refresh()
+    app.own_pane = "%2"
+    assert app.current_session == "b"
+    dots = [i for i, r in enumerate(app.rows(36, 40)) if to_plain(r).rstrip().endswith("●")]
+    assert dots and app.row_keys[dots[0]] == "pane:%2"
+
+
+def test_mouse_modifier_bits_do_not_hide_the_button():
+    assert decode_keys("\x1b[<4;5;3M") == ["click:2"]  # shift
+    assert decode_keys("\x1b[<16;5;3M") == ["click:2"]  # ctrl
+    assert decode_keys("\x1b[<68;5;3M") == ["up"]
+    assert decode_keys("\x1b[<32;5;3M\x1b[<35;5;3M") == []  # motion
+    assert decode_keys("\x1b[<0;5;3M\x1b[<0;5;3m") == ["click:2"]  # press and release in one read
+
+
+def test_code_watch_reloads_only_after_a_stable_change():
+    from sebside.tui import CodeWatch
+
+    state: list[tuple[tuple[str, int, int], ...] | None] = [(("a.py", 1, 1),)]
+    watch = CodeWatch(lambda: state[0], interval=3.0)
+    assert watch.changed(0.0) is False
+    state[0] = (("a.py", 2, 1),)
+    assert watch.changed(1.0) is False  # too soon
+    assert watch.changed(4.0) is False  # first sighting of the change
+    state[0] = (("a.py", 3, 1),)  # still being written
+    assert watch.changed(8.0) is False
+    state[0] = None  # unreadable mid-upgrade
+    assert watch.changed(12.0) is False
+    state[0] = (("a.py", 3, 1),)
+    assert watch.changed(16.0) is False
+    assert watch.changed(20.0) is True
+
+
+def test_code_fingerprint_follows_file_changes(tmp_path: Path):
+    from sebside.tui import code_fingerprint
+
+    (tmp_path / "m.py").write_text("x")
+    before = code_fingerprint(tmp_path)
+    (tmp_path / "m.py").write_text("xyz")
+    assert before is not None and code_fingerprint(tmp_path) != before
+    assert code_fingerprint(tmp_path / "missing") == ()

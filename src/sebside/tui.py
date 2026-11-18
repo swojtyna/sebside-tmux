@@ -1,4 +1,4 @@
-"""The sidebar: a keyboard-only TUI drawn with raw ANSI escapes.
+"""The sidebar: a keyboard-and-mouse TUI drawn with raw ANSI escapes.
 
 `App` holds the logic (poll, reconcile, selection, keys, actions) and is tested without a terminal. `run` owns the
 terminal: alternate screen, hidden cursor, cbreak mode, a SIGWINCH flag, a select() loop and whole-frame writes that
@@ -27,7 +27,7 @@ from .cards import Board, build, newly_seen, reconcile, server_of
 from .errors import SebsideError
 from .log import logger
 from .model import OPTION_ROLE, SIDEBAR_ROLE, Card, Pane, State
-from .render import Row, clean, frame_rows, to_ansi
+from .render import Row, clean, frame_layout, to_ansi
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,7 +56,24 @@ KEY_ALIASES: dict[str, str] = {
     "g": "top",
     "G": "bottom",
 }
-ESCAPE_SEQUENCE = re.compile(r"\x1b(\[[0-9;]*[A-Za-z~]|O[A-Za-z])")
+ESCAPE_SEQUENCE = re.compile(r"\x1b(\[<[0-9;]*[Mm]|\[[0-9;]*[A-Za-z~]|O[A-Za-z])")
+MOUSE_REPORT = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
+MOUSE_ON = "\x1b[?1000h\x1b[?1006h"  # report presses and wheel, in SGR form (no 223-column limit)
+MOUSE_OFF = "\x1b[?1000l\x1b[?1006l"
+CLICK = "click:"
+MODIFIER_BITS = 4 | 8 | 16
+WHEEL = {64: "up", 65: "down"}
+
+
+def decode_mouse(token: str) -> str | None:
+    """An SGR mouse report -> "up"/"down" (wheel) or "click:<screen row, 0-based>" (left press); else None."""
+    match = MOUSE_REPORT.fullmatch(token)
+    if match is None or match.group(4) != "M":
+        return None
+    button = int(match.group(1)) & ~MODIFIER_BITS  # shift/meta/ctrl do not change which button it was
+    if button == 0:
+        return f"{CLICK}{int(match.group(3)) - 1}"
+    return WHEEL.get(button)
 
 
 def decode_keys(data: str) -> list[str]:
@@ -67,8 +84,9 @@ def decode_keys(data: str) -> list[str]:
         match = ESCAPE_SEQUENCE.match(data, index)
         token = match.group(0) if match else data[index]
         index += len(token)
-        if token in KEY_ALIASES:
-            keys.append(KEY_ALIASES[token])
+        key = decode_mouse(token) if token.startswith("\x1b[<") else KEY_ALIASES.get(token)
+        if key:
+            keys.append(key)
     return keys
 
 
@@ -100,7 +118,9 @@ class App:
     message: str = ""
     prefix: str = "C-b"
     own_pane: str = ""  # this sidebar's pane id (from $TMUX_PANE); empty when unknown
+    reload: bool = False  # the installed code changed: restart this process once the terminal is restored
     companion_seen: bool = False  # a non-sidebar pane has shared this window with us at least once
+    row_keys: list[str | None] = field(default_factory=list)  # card key under each screen row, as last painted
 
     # data --------------------------------------------------------------------------------------------
     def refresh(self) -> None:
@@ -159,6 +179,9 @@ class App:
         """Returns False to quit."""
         if key == "quit":
             return False
+        if key.startswith(CLICK):
+            self._click(int(key.removeprefix(CLICK)))
+            return True
         self.message = ""
         if self.mode == "confirm":
             if key in ("enter", "yes"):
@@ -173,6 +196,14 @@ class App:
         elif key == "enter":
             self.activate()
         return True
+
+    def _click(self, row: int) -> None:
+        """Select and activate the card under a screen row. Only in the list: a click never confirms a resume."""
+        if self.mode != "list" or not 0 <= row < len(self.row_keys) or self.row_keys[row] is None:
+            return
+        self.message = ""
+        self.selected_key = self.row_keys[row]
+        self.activate()
 
     def _move(self, key: str) -> None:
         keys = [card.key for card in self.board.cards]
@@ -248,9 +279,15 @@ class App:
         self.tmux.show(name, "", "")
         self.message = f"resumed in session {name}"
 
+    @property
+    def current_session(self) -> str | None:
+        """The tmux session this sidebar's own pane lives in (None while the pane is unknown)."""
+        mine = next((pane for pane in self.panes if pane.pane_id == self.own_pane), None)
+        return mine.session if mine else None
+
     # drawing -----------------------------------------------------------------------------------------
     def rows(self, width: int, height: int, frame: int = 0) -> list[Row]:
-        return frame_rows(
+        rows, self.row_keys = frame_layout(
             self.board,
             self.selected_key,
             width,
@@ -262,12 +299,62 @@ class App:
             message=self.message,
             prefix=self.prefix,
             resume_allowed=self.resume_allowed(),
+            current_session=self.current_session,
         )
+        return rows
 
 
 # terminal ----------------------------------------------------------------------------------------
 ESCAPE_WAIT_S = 0.05
-PARTIAL_ESCAPE = re.compile(r"\x1b(\[[0-9;]*|O)?$")
+PARTIAL_ESCAPE = re.compile(r"\x1b(\[<?[0-9;]*|O)?$")
+
+
+RELOAD_CHECK_S = 3.0
+PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def code_fingerprint(root: Path = PACKAGE_DIR) -> tuple[tuple[str, int, int], ...] | None:
+    """Name, mtime and size of every module of the installed package; None while the files cannot be read (for
+    instance in the middle of an upgrade)."""
+    try:
+        return tuple(
+            sorted((path.name, path.stat().st_mtime_ns, path.stat().st_size) for path in root.glob("*.py"))
+        )
+    except OSError:
+        return None
+
+
+@dataclass
+class CodeWatch:
+    """Notices that sebside was upgraded under a running sidebar. A change counts once it is seen twice in a row,
+    so an upgrade that is still copying files is not mistaken for a finished one."""
+
+    fingerprint: Callable[[], tuple[tuple[str, int, int], ...] | None] = code_fingerprint
+    interval: float = RELOAD_CHECK_S
+    known: tuple[tuple[str, int, int], ...] | None = None
+    candidate: tuple[tuple[str, int, int], ...] | None = None
+    checked_at: float = float("-inf")
+
+    def __post_init__(self) -> None:
+        self.known = self.fingerprint()
+
+    def changed(self, now: float) -> bool:
+        if now - self.checked_at < self.interval:
+            return False
+        self.checked_at = now
+        current = self.fingerprint()
+        if current is None or current == self.known:
+            self.candidate = None
+            return False
+        if current != self.candidate:
+            self.candidate = current
+            return False
+        return True
+
+
+def reexec() -> None:
+    """Replace this process by a fresh sebside with the same arguments and environment (same pane, new code)."""
+    os.execv(sys.executable, [sys.executable, "-m", "sebside", *sys.argv[1:]])
 
 
 def split_pending(data: str) -> tuple[str, str]:
@@ -304,6 +391,19 @@ class _Resized:
 
 
 def run(app: App, own_pane: str | None = None) -> int:
+    code = _run(app, own_pane)
+    if app.reload:
+        logger().debug("sebside was upgraded, restarting the sidebar")
+        try:
+            reexec()
+        except OSError:
+            logger().exception("restart after upgrade failed")
+            print("sebside: upgraded, but the sidebar could not restart itself: reopen it", file=sys.stderr)
+            return 1
+    return code
+
+
+def _run(app: App, own_pane: str | None) -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print("sebside: the sidebar needs a terminal: run it inside a tmux pane", file=sys.stderr)
         return 2
@@ -322,9 +422,10 @@ def run(app: App, own_pane: str | None = None) -> int:
     last_paint = ""
     pending = ""
     previous_term = signal.signal(signal.SIGTERM, _exit_on_signal)
+    watch = CodeWatch()
     try:
         tty.setcbreak(fd)
-        out.write("\x1b[?1049h\x1b[?25l\x1b[2J")
+        out.write("\x1b[?1049h\x1b[?25l\x1b[2J" + MOUSE_ON)
         out.flush()
         while True:
             stamp = app.store.dir_stamp()
@@ -333,14 +434,17 @@ def run(app: App, own_pane: str | None = None) -> int:
                 last_poll, last_stamp = time.monotonic(), app.store.dir_stamp()
                 if app.alone():
                     return 0
+            if watch.changed(time.monotonic()):
+                app.reload = True
+                return 0
             if resized.flag:
                 resized.flag = False
                 last_paint = ""
-                out.write("\x1b[2J")
+                out.write("\x1b[2J" + MOUSE_ON)
             columns, lines = terminal_size(fd, app.config.width)
             painted = paint(app.rows(columns, lines, int(time.time() * SPINNER_HZ)))
             if painted != last_paint:
-                out.write(painted)
+                out.write(MOUSE_ON + painted)  # cheap, and keeps mouse mode on whatever happened to the terminal
                 out.flush()
                 last_paint = painted
             try:
@@ -357,12 +461,12 @@ def run(app: App, own_pane: str | None = None) -> int:
             for key in decode_keys(complete):
                 if not app.handle_key(key):
                     return 0
-                if key in ("enter", "yes"):
+                if key in ("enter", "yes") or key.startswith(CLICK):
                     last_poll = 0.0  # show the effect at once
     except KeyboardInterrupt:
         return 0
     finally:
-        out.write("\x1b[0m\x1b[?25h\x1b[?1049l")
+        out.write(MOUSE_OFF + "\x1b[0m\x1b[?25h\x1b[?1049l")
         out.flush()
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
         signal.signal(signal.SIGWINCH, previous_handler)

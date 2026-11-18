@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 BAR = "▌"
 RULE = "─"
 ELLIPSIS = "…"
+HERE = "●"  # marks the card of the session this sidebar sits in
 
 
 @dataclass(frozen=True)
@@ -79,14 +80,19 @@ def cells(text: str, style: Style) -> Row:
     return row
 
 
-def line(width: int, left: list[Span], right: Span | None = None, bg: str | None = None, margin: bool = True) -> Row:
+def line(
+    width: int, left: list[Span], right: Span | list[Span] | None = None, bg: str | None = None, margin: bool = True
+) -> Row:
     """A row of exactly `width` cells: left spans, padding, right span, one trailing space. Column 0 is a margin
     that never takes the selection background."""
     blank = Style(bg=bg)
     row: Row = [(" ", Style())] if margin else []
     for text, style in left:
         row += cells(text, Style(style.fg, style.bold, style.dim, bg))
-    right_cells = cells(right[0], Style(right[1].fg, right[1].bold, right[1].dim, bg)) if right else []
+    right_spans = [right] if isinstance(right, tuple) else right or []
+    right_cells: Row = []
+    for text, style in right_spans:
+        right_cells += cells(text, Style(style.fg, style.bold, style.dim, bg))
     pad = width - 1 - len(row) - len(right_cells)
     row += [(" ", blank)] * max(pad, 0) + right_cells
     row = fit(row, max(width - 1, 0))
@@ -130,11 +136,29 @@ def color_of(card: Card, config: Config) -> str:
     return config.colors["closed"] if not card.live else config.colors[card.state.value]
 
 
-def card_rows(card: Card, width: int, selected: bool, config: Config, now: float, frame: int = 0) -> list[Row]:
+def _second_right(extra: str, here: bool, extra_style: Style, dot_style: Style) -> list[Span] | None:
+    """Right side of line 2: the extra text, then the "you are here" dot (a space apart from the extra)."""
+    spans: list[Span] = [(extra, extra_style)] if extra else []
+    if here:
+        spans += [((" " if extra else "") + HERE, dot_style)]
+    return spans or None
+
+
+def card_rows(
+    card: Card,
+    width: int,
+    selected: bool,
+    config: Config,
+    now: float,
+    frame: int = 0,
+    *,
+    current_session: str | None = None,
+) -> list[Row]:
     """Three lines and a thin rule:  ▌ ● title   time /  ▌   subtitle   extra /  ▌   description…"""
     bg = config.colors["selected-bg"] if selected else None
     color = color_of(card, config)
-    quiet = (card.state in DIMMED or not card.live) and not selected  # the selected card is never dimmed
+    here = current_session is not None and card.session == current_session
+    quiet = (card.state in DIMMED or not card.live) and not selected and not here  # selected/current: never dimmed
     text = config.colors["text"]
     bar: Span = (BAR, Style(color, bold=True))
     body = width - 6
@@ -145,7 +169,8 @@ def card_rows(card: Card, width: int, selected: bool, config: Config, now: float
         when = clip(card.extra, max(body // 3, 0)) if card.extra else ""
         extra = ""
     title = clip(card.title, body - text_width(when) - 1)
-    subtitle = clip(card.subtitle, body - (text_width(extra) + 1 if extra else 0))
+    reserved = (text_width(extra) + 1 if extra else 0) + (2 if here else 0)
+    subtitle = clip(card.subtitle, body - reserved)
     desc = clip(card.desc, body)
     first = line(
         width,
@@ -162,7 +187,7 @@ def card_rows(card: Card, width: int, selected: bool, config: Config, now: float
     second = line(
         width,
         [bar, ("   ", Style()), (subtitle, Style(text, dim=True))],
-        (extra, Style(text, bold=not quiet, dim=quiet)) if extra else None,
+        _second_right(extra, here, Style(text, bold=not quiet, dim=quiet), Style(color, bold=True)),
         bg,
     )
     third = line(width, [bar, ("   ", Style()), (desc, Style(text, dim=True))], None, bg)
@@ -295,23 +320,88 @@ def wrap_fact(label: str, value: str, width: int, config: Config) -> list[Row]:
     return out
 
 
+def body_layout(
+    board: Board,
+    selected_key: str | None,
+    width: int,
+    config: Config,
+    now: float,
+    frame: int,
+    current_session: str | None = None,
+) -> tuple[list[Row], tuple[int, int], list[str | None]]:
+    """All card rows, the row span of the selected card (for scrolling) and the card key of every row (None for
+    rows that belong to no card, such as the "recently closed" header)."""
+    rows: list[Row] = []
+    keys: list[str | None] = []
+    span = (0, 0)
+    muted = Style(config.colors["muted"], dim=True)
+    if not board.cards:
+        return [line(width, [("No tmux sessions to show.", muted)])], span, [None]
+    for index, card in enumerate(board.cards):
+        if index == len(board.live) and board.history:
+            rows.append(line(width, [("recently closed", muted)]))
+            keys.append(None)
+        start = len(rows)
+        rows += card_rows(
+            card, width, card.key == selected_key, config, now, frame, current_session=current_session
+        )
+        keys += [card.key] * (len(rows) - len(keys))
+        if card.key == selected_key:
+            span = (start, len(rows))
+    return rows, span, keys
+
+
 def body_rows(
     board: Board, selected_key: str | None, width: int, config: Config, now: float, frame: int
 ) -> tuple[list[Row], tuple[int, int]]:
     """All card rows, and the row span of the selected card (for scrolling)."""
-    rows: list[Row] = []
-    span = (0, 0)
-    muted = Style(config.colors["muted"], dim=True)
-    if not board.cards:
-        return [line(width, [("No tmux sessions to show.", muted)])], span
-    for index, card in enumerate(board.cards):
-        if index == len(board.live) and board.history:
-            rows.append(line(width, [("recently closed", muted)]))
-        start = len(rows)
-        rows += card_rows(card, width, card.key == selected_key, config, now, frame)
-        if card.key == selected_key:
-            span = (start, len(rows))
+    rows, span, _ = body_layout(board, selected_key, width, config, now, frame)
     return rows, span
+
+
+def frame_layout(
+    board: Board,
+    selected_key: str | None,
+    width: int,
+    height: int,
+    config: Config,
+    now: float,
+    *,
+    frame: int = 0,
+    mode: str = "list",
+    message: str = "",
+    prefix: str = "C-b",
+    resume_allowed: bool = False,
+    current_session: str | None = None,
+) -> tuple[list[Row], list[str | None]]:
+    """The whole screen and, per screen row, the card key under it (None for anything else). Cards are scrolled to
+    keep the selection visible, then come the counter and key hints."""
+    footer: list[Row] = []
+    if message:
+        footer.append(line(width, [(clip(message, width - 1), Style(config.colors["text"], bold=True))], margin=False))
+    footer.append(line(width, []))
+    footer.append(counter_row(board, width, config, frame))
+    footer += hint_rows(width, config, prefix, mode)
+    room = max(height - len(footer), 0)
+    selected = next((card for card in board.cards if card.key == selected_key), None)
+    body_keys: list[str | None] = []
+    if mode == "explain":
+        body = explain_rows(selected, width, config, now)[:room]
+    elif mode == "confirm":
+        body = confirm_rows(selected, width, config, resume_allowed)[:room]
+    else:
+        rows, (start, end), keys = body_layout(
+            board, selected_key, width, config, now, frame, current_session
+        )
+        offset = max(0, end - room) if end > room else 0
+        offset = min(offset, start)
+        body = rows[offset : offset + room]
+        body_keys = keys[offset : offset + room]
+    body_keys += [None] * (room - len(body_keys))
+    body += [line(width, [])] * (room - len(body))
+    if height <= 0:
+        return [], []
+    return (body + footer)[-height:], (body_keys + [None] * len(footer))[-height:]
 
 
 def frame_rows(
@@ -327,27 +417,23 @@ def frame_rows(
     message: str = "",
     prefix: str = "C-b",
     resume_allowed: bool = False,
+    current_session: str | None = None,
 ) -> list[Row]:
     """The whole screen: cards (scrolled to keep the selection visible), then the counter and key hints."""
-    footer: list[Row] = []
-    if message:
-        footer.append(line(width, [(clip(message, width - 1), Style(config.colors["text"], bold=True))], margin=False))
-    footer.append(line(width, []))
-    footer.append(counter_row(board, width, config, frame))
-    footer += hint_rows(width, config, prefix, mode)
-    room = max(height - len(footer), 0)
-    selected = next((card for card in board.cards if card.key == selected_key), None)
-    if mode == "explain":
-        body = explain_rows(selected, width, config, now)[:room]
-    elif mode == "confirm":
-        body = confirm_rows(selected, width, config, resume_allowed)[:room]
-    else:
-        rows, (start, end) = body_rows(board, selected_key, width, config, now, frame)
-        offset = max(0, end - room) if end > room else 0
-        offset = min(offset, start)
-        body = rows[offset : offset + room]
-    body += [line(width, [])] * (room - len(body))
-    return (body + footer)[-height:] if height > 0 else []
+    return frame_layout(
+        board,
+        selected_key,
+        width,
+        height,
+        config,
+        now,
+        frame=frame,
+        mode=mode,
+        message=message,
+        prefix=prefix,
+        resume_allowed=resume_allowed,
+        current_session=current_session,
+    )[0]
 
 
 # ANSI ---------------------------------------------------------------------------------------------
