@@ -386,9 +386,22 @@ class CodeWatch:
         return True
 
 
-def reexec() -> None:
-    """Replace this process by a fresh sebside with the same arguments and environment (same pane, new code)."""
-    os.execv(sys.executable, [sys.executable, "-m", "sebside", *sys.argv[1:]])
+REEXEC_TRIES = 20
+REEXEC_GAP_S = 0.5
+
+
+def reexec(execv: Callable[[str, list[str]], None] = os.execv, sleep: Callable[[float], None] = time.sleep) -> None:
+    """Replace this process by a fresh sebside with the same arguments and environment (same pane, new code).
+    `uv tool install --reinstall` rebuilds the tool's environment, so its python can be missing for a moment: try
+    again for up to ~10 s before giving up (a sidebar vanished that way on 2026-11-18)."""
+    for attempt in range(REEXEC_TRIES):
+        try:
+            execv(sys.executable, [sys.executable, "-m", "sebside", *sys.argv[1:]])
+            return
+        except OSError:
+            if attempt == REEXEC_TRIES - 1:
+                raise
+            sleep(REEXEC_GAP_S)
 
 
 def split_pending(data: str) -> tuple[str, str]:

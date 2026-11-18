@@ -57,3 +57,26 @@ def test_the_allowlist_lets_only_the_shared_width_and_an_own_pane_resize_through
                                   ("resize-pane", ("-t", "%3", "-y", "44")), ("resize-pane", ("-t", "main", "-x", "44"))]:
         with pytest.raises(ForbiddenCommand):
             check_command(subcommand, arguments)
+
+
+def test_reexec_retries_while_the_tool_environment_is_rebuilt():
+    import pytest
+
+    from sebside.tui import REEXEC_TRIES, reexec
+
+    calls, naps = [], []
+
+    def flaky(path, argv):
+        calls.append(path)
+        if len(calls) < 3:
+            raise FileNotFoundError(path)
+
+    reexec(flaky, naps.append)
+    assert len(calls) == 3 and len(naps) == 2
+
+    def gone(path, argv):
+        raise FileNotFoundError(path)
+
+    with pytest.raises(OSError):
+        reexec(gone, lambda seconds: None)
+    assert REEXEC_TRIES >= 10
