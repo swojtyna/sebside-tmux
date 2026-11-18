@@ -239,7 +239,6 @@ class App:
         if not done.ok:
             self.message = f"cannot switch: {done.error}"
             return
-        self.message = f"showing {card.title}"
         if card.card_id and card.state is State.DONE:
             self.store.mark_seen({card.card_id: card.rev})
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .config import ANSI_NAMES, HEX, Config
-from .model import DIMMED, Card, State
+from .model import Card, State
 
 if TYPE_CHECKING:
     from .cards import Board
@@ -158,7 +158,7 @@ def card_rows(
     bg = config.colors["selected-bg"] if selected else None
     color = color_of(card, config)
     here = current_session is not None and card.session == current_session
-    quiet = (card.state in DIMMED or not card.live) and not selected and not here  # selected/current: never dimmed
+    quiet = not card.live and not selected  # only closed cards are dimmed; state shows in the bar and icon
     text = config.colors["text"]
     bar: Span = (BAR, Style(color, bold=True))
     body = width - 6

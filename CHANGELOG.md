@@ -6,13 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Live cards never have dimmed text: the state shows only in the bar colour and the icon. Only recently closed cards
+  are dimmed.
+- No more "showing <title>" message after switching (it went stale); errors are still shown.
+
 ### Added
 
 - Mouse support in the sidebar: a left click selects and activates a card (like Enter), the wheel moves the selection.
   Uses SGR mouse reporting (enabled on start, disabled on exit). Needs tmux `mouse on`. Clicks are ignored in the
   resume confirmation and explain views.
 - A bold `●` on the second line of the card whose session contains the sidebar, so you can tell where you are apart
-  from where the cursor is. The current card is never dimmed.
+  from where the cursor is. 
 - A running sidebar restarts itself (same pane, same arguments) a few seconds after sebside is upgraded, so old
   sidebars no longer stay keyboard-only. Mouse mode is re-sent on every repaint; mouse modifier bits are ignored.
 

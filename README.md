@@ -15,8 +15,9 @@ sebside keeps a narrow pane on the left with one card per session or task:
 - **waiting** (yellow ●) and **error** (red ✖) cards float to the top: they need you.
 - **working** (cyan spinner) means busy, nothing to do.
 - **done** (green ✔) means finished; it turns quiet once you have looked at it.
-- **quiet** (grey ○) and **unknown** (grey ?) are dimmed.
-- Recently closed cards stay at the bottom, greyed, and can be resumed with Enter.
+- **quiet** (grey ○) and **unknown** (grey ?) show their state in the bar and icon only; the text of a live card is
+  never dimmed.
+- Recently closed cards stay at the bottom, dimmed and greyed, and can be resumed with Enter.
 
 It works with plain tmux out of the box (session name, directory, current command, last activity). Any program can
 make its card richer with one command: `sebside card set --id build --state working --desc "compiling"`.

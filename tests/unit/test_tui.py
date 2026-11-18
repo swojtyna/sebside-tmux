@@ -82,7 +82,7 @@ def test_enter_switches_to_live_card_and_never_types(server, app):
     app.handle_key("enter")
     assert server.commands()[-3:] == ["switch-client", "select-window", "select-pane"]
     assert "send-keys" not in server.commands()
-    assert app.message == "showing api"
+    assert app.message == ""
 
 
 def test_enter_with_focus_main_lands_in_the_main_pane(server, app):
@@ -275,7 +275,7 @@ def test_click_selects_and_activates_the_card_under_the_row(server, app):
     app.handle_key("click:5")  # second card spans rows 4-7
     assert app.selected_key == "pane:%2"
     assert server.commands()[-3:] == ["switch-client", "select-window", "select-pane"]
-    assert app.message == "showing b"
+    assert app.message == ""
 
 
 def test_click_respects_scroll_offset_and_multi_row_cards(server, app):

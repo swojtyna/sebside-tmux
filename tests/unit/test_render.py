@@ -58,10 +58,7 @@ def test_selected_card_gets_background_except_margin():
     assert "100" in to_ansi(first)
 
 
-def test_quiet_card_is_dimmed_and_closed_card_grey():
-    quiet = card_rows(card(State.QUIET), 36, False, Config(), NOW)[0]
-    title_style = quiet[5][1]
-    assert title_style.dim and not title_style.bold
+def test_closed_card_is_grey():
     closed = card_rows(card(State.WAITING, live=False), 36, False, Config(), NOW)[0]
     assert closed[1][1].fg == "grey" and to_plain(closed)[3] == "↺"
 
@@ -175,8 +172,9 @@ def test_dot_follows_the_extra_text_without_breaking_width():
     assert len(long[1]) == 36 and to_plain(long[1]).endswith("3/4 ● ")
 
 
-def test_current_session_card_is_never_dimmed():
-    done = card(State.QUIET, session="api")
-    plain = card_rows(done, 36, False, Config(), NOW)[0][5][1]
-    here = card_rows(done, 36, False, Config(), NOW, current_session="api")[0][5][1]
-    assert plain.dim and not here.dim and here.bold
+def test_live_cards_are_never_dimmed_but_closed_ones_are():
+    for state in (State.QUIET, State.DONE, State.UNKNOWN):
+        style = card_rows(card(state), 36, False, Config(), NOW)[0][5][1]
+        assert not style.dim and style.bold
+    closed = card(State.QUIET, live=False)
+    assert card_rows(closed, 36, False, Config(), NOW)[0][5][1].dim
