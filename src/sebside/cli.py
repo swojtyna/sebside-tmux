@@ -21,7 +21,7 @@ from .cards import build, reconcile, server_of
 from .config import SORTS, Config, config_path, load_from_env
 from .errors import EXIT_OK, SebsideError, StateError, TmuxError, UsageError
 from .log import logger, setup
-from .model import OPTION_ID, OPTION_ROLE, OPTION_STATE, SIDEBAR_ROLE, CardRecord, State, TmuxRef, parse_state
+from .model import OPTION_ID, OPTION_ROLE, OPTION_STATE, SIDEBAR_ROLE, CardRecord, Meter, State, TmuxRef, parse_state
 from .render import clean
 from .store import Store
 from .tmux import FIELD_SEP, OWN_HOOKS, PANE_ID, Tmux, format_field, server_from_env
@@ -78,6 +78,15 @@ def _parser() -> argparse.ArgumentParser:
     clear.add_argument("--forget", action="store_true", help="delete the card file too")
 
     card.add_parser("list", parents=[common], help="print live and recently closed cards as JSON")
+
+    meter = commands.add_parser("meter", help="set or clear the usage meter under the counter").add_subparsers(
+        dest="meter", required=True
+    )
+    meter_set = meter.add_parser("set", parents=[common], help="show `label ████░░ N%%` and a note under the counter")
+    meter_set.add_argument("--label", required=True, help="short name, e.g. week")
+    meter_set.add_argument("--percent", required=True, type=int, help="0..100")
+    meter_set.add_argument("--note", default="", help="second line, e.g. when the limit resets")
+    meter.add_parser("clear", parents=[common], help="remove the meter")
 
     commands.add_parser(
         "reconcile", parents=[common], help="close cards whose pane is gone (the session-closed hook calls this)"
@@ -377,7 +386,24 @@ def run_sidebar(ctx: Context, args: argparse.Namespace) -> int:
     return run(app, ctx.env.get("TMUX_PANE") if ctx.env.get("TMUX") else None)
 
 
+def run_meter_set(ctx: Context, args: argparse.Namespace) -> int:
+    if not 0 <= args.percent <= 100:
+        raise UsageError(f"--percent must be 0..100, got {args.percent}")
+    label = _one_line(args.label, 16)
+    if not label:
+        raise UsageError("--label must not be empty")
+    ctx.store.write_meter(Meter(label, args.percent, _one_line(args.note, 60), ctx.now))
+    return EXIT_OK
+
+
+def run_meter_clear(ctx: Context, args: argparse.Namespace) -> int:
+    ctx.store.clear_meter()
+    return EXIT_OK
+
+
 COMMANDS: dict[str, Command] = {
+    "meter set": run_meter_set,
+    "meter clear": run_meter_clear,
     "sidebar": run_sidebar,
     "card set": run_card_set,
     "card clear": run_card_clear,
@@ -399,6 +425,8 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
     name = args.command or "sidebar"
     if name == "card":
         name = f"card {args.card}"
+    if name == "meter":
+        name = f"meter {args.meter}"
     try:
         setup(debug, store.root)
         return COMMANDS[name](ctx, args)

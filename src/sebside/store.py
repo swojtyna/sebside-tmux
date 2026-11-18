@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .errors import StateError
-from .model import SCHEMA, CardRecord, State, TmuxRef, parse_state
+from .model import SCHEMA, CardRecord, Meter, State, TmuxRef, parse_state
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -282,6 +282,55 @@ class Store:
             if isinstance(error, UnicodeError | ValueError):
                 raise StateError(f"cannot write {target}: text is not valid UTF-8") from None
             raise
+
+    @property
+    def meter_path(self) -> Path:
+        return self.root / "meter.json"
+
+    def write_meter(self, meter: Meter) -> None:
+        """Atomic write of the usage meter (temporary file + rename, 0600)."""
+        self.ensure_dir()
+        descriptor, temporary = tempfile.mkstemp(prefix=".meter-", suffix=".tmp", dir=self.root)
+        try:
+            os.fchmod(descriptor, 0o600)
+            data = {"label": meter.label, "percent": meter.percent, "note": meter.note, "at": meter.at}
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False)
+            Path(temporary).replace(self.meter_path)
+        except OSError as error:
+            with contextlib.suppress(OSError):
+                Path(temporary).unlink()
+            raise StateError(f"cannot write {self.meter_path}: {error.strerror}") from None
+
+    def clear_meter(self) -> bool:
+        try:
+            self.meter_path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def load_meter(self) -> Meter | None:
+        """The usage meter; None when missing, not a regular file owned by us, or not valid."""
+        try:
+            descriptor = os.open(self.meter_path, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError:
+            return None
+        try:
+            info = os.fstat(descriptor)
+            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+                return None
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                data = parse_json(handle.read(10_000))
+        finally:
+            os.close(descriptor)
+        if data is None:
+            return None
+        label, percent, note, at = data.get("label"), data.get("percent"), data.get("note", ""), data.get("at", 0)
+        if not isinstance(label, str) or not isinstance(note, str) or isinstance(percent, bool):
+            return None
+        if not isinstance(percent, int) or not isinstance(at, int | float) or isinstance(at, bool):
+            return None
+        return Meter(label, max(0, min(100, percent)), note, float(at))
 
     def update(self, card_id: str, change: Callable[[CardRecord | None], CardRecord | None]) -> CardRecord | None:
         """Read, change and write one card under the lock. `change` returns None to write nothing."""

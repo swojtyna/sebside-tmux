@@ -28,6 +28,16 @@ OPTION_RESUMED = "@sebside_resumed"  # session option: sebside resumed this sess
 SIDEBAR_ROLE = "sidebar"
 
 
+@dataclass(frozen=True, slots=True)
+class Meter:
+    """One usage meter under the counter row, e.g. a weekly limit: `label ████░░░ 47%` and a note below."""
+
+    label: str
+    percent: int  # 0..100
+    note: str = ""
+    at: float = 0.0  # when it was set (epoch seconds); an old meter is not drawn
+
+
 def parse_state(value: str) -> State:
     try:
         return State(value.strip().lower())

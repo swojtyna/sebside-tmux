@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from .cards import Board, build, newly_seen, reconcile, server_of
 from .errors import SebsideError
 from .log import logger
-from .model import OPTION_ROLE, SIDEBAR_ROLE, Card, Pane, State
+from .model import OPTION_ROLE, SIDEBAR_ROLE, Card, Meter, Pane, State
 from .render import Row, clean, frame_layout, to_ansi
 
 if TYPE_CHECKING:
@@ -123,6 +123,7 @@ class App:
     reload: bool = False  # the installed code changed: restart this process once the terminal is restored
     companion_seen: bool = False  # a non-sidebar pane has shared this window with us at least once
     row_keys: list[str | None] = field(default_factory=list)  # card key under each screen row, as last painted
+    meter: Meter | None = None  # the usage meter under the counter, as last read
 
     # data --------------------------------------------------------------------------------------------
     def refresh(self) -> None:
@@ -134,6 +135,7 @@ class App:
             self.message = f"refresh failed: {clean(str(error))}"
 
     def _refresh(self) -> None:
+        self.meter = self.store.load_meter()
         panes = self.tmux.list_panes()
         if panes is None:
             self.message = "tmux did not answer; showing the last known cards"
@@ -331,6 +333,7 @@ class App:
             prefix=self.prefix,
             resume_allowed=self.resume_allowed(),
             current_session=self.current_session,
+            meter=self.meter,
         )
         return rows
 

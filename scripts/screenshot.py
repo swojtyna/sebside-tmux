@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from sebside.cards import Board
 from sebside.config import Config
-from sebside.model import Card, State
+from sebside.model import Card, Meter, State
 from sebside.render import Row, frame_rows
 
 NOW = 1_800_000_000.0
@@ -124,7 +124,8 @@ def draw(rows: list[Row], path: Path) -> None:
 def main() -> None:
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "docs/screenshot.png")
     board = demo_board()
-    rows = frame_rows(board, board.live[0].key, WIDTH, HEIGHT, Config(), NOW, frame=3)
+    meter = Meter("week", 62, "resets Fri 20.11 11:00", NOW)
+    rows = frame_rows(board, board.live[0].key, WIDTH, HEIGHT, Config(), NOW, frame=3, meter=meter)
     draw(rows, out)
     print(f"wrote {out}")
 

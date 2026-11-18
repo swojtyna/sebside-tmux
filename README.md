@@ -102,6 +102,8 @@ Other commands:
 
 ```sh
 sebside card clear [--id ID] [--forget]   # close the card (keep it in history unless --forget)
+sebside meter set --label week --percent 47 --note "resets Fri 11:00"   # usage meter under the counter
+sebside meter clear
 sebside card list                         # live and recently closed cards as JSON
 sebside reconcile                         # close cards whose pane is gone (the hook runs this)
 sebside config path | show | get KEY

@@ -8,6 +8,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `sebside meter set --label L --percent N [--note TEXT]` / `sebside meter clear`: one usage meter under the
+  counter (`label ████░░ N%` and the note below), e.g. a weekly limit. Hidden once older than `stale_hours`.
+
 - The `x` / Delete key forgets the selected recently closed card (its own
   card file only, after the same ownership checks as resume). Live cards are never removed.
 - A click on a recently closed card resumes it at once (still only allowlisted programs, no shell); Enter asks first,

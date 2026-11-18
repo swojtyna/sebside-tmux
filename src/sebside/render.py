@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .config import ANSI_NAMES, HEX, Config
-from .model import Card, State
+from .model import Card, Meter, State
 
 if TYPE_CHECKING:
     from .cards import Board
@@ -221,6 +221,40 @@ def counter_row(board: Board, width: int, config: Config, frame: int) -> Row:
     return line(width, spans, margin=False)
 
 
+METER_FULL = "█"
+METER_EMPTY = "░"
+
+
+def meter_rows(meter: Meter | None, width: int, config: Config, now: float) -> list[Row]:
+    """`label ████████░░░░░░  47%` and the note under it, aligned with the bar. Nothing for a missing meter or one
+    older than `stale_hours` (its number would no longer be true)."""
+    if meter is None or now - meter.at > config.stale_hours * 3600:
+        return []
+    text = config.colors["text"]
+    level = "error" if meter.percent >= 90 else "waiting" if meter.percent >= 75 else "working"
+    label = clip(meter.label, 12) + " "
+    value = f"  {meter.percent}%"
+    room = max(width - 1 - text_width(label) - len(value), 4)
+    filled = round(room * meter.percent / 100)
+    rows = [
+        line(
+            width,
+            [
+                (label, Style(text)),
+                (METER_FULL * filled, Style(config.colors[level])),
+                (METER_EMPTY * (room - filled), Style(config.colors["muted"], dim=True)),
+                (value, Style(text, bold=meter.percent >= 75)),
+            ],
+            margin=False,
+        )
+    ]
+    if meter.note:
+        indent = " " * text_width(label)
+        note = indent + clip(meter.note, width - 1 - len(indent))
+        rows.append(line(width, [(note, Style(text, dim=True))], margin=False))
+    return rows
+
+
 def hint_rows(width: int, config: Config, prefix: str, mode: str) -> list[Row]:
     muted = Style(config.colors["text"], dim=True)
     key = prefix_label(prefix)
@@ -373,6 +407,7 @@ def frame_layout(
     prefix: str = "C-b",
     resume_allowed: bool = False,
     current_session: str | None = None,
+    meter: Meter | None = None,
 ) -> tuple[list[Row], list[str | None]]:
     """The whole screen and, per screen row, the card key under it (None for anything else). Cards are scrolled to
     keep the selection visible, then come the counter and key hints."""
@@ -381,6 +416,7 @@ def frame_layout(
         footer.append(line(width, [(clip(message, width - 1), Style(config.colors["text"], bold=True))], margin=False))
     footer.append(line(width, []))
     footer.append(counter_row(board, width, config, frame))
+    footer += meter_rows(meter, width, config, now)
     footer += hint_rows(width, config, prefix, mode)
     room = max(height - len(footer), 0)
     selected = next((card for card in board.cards if card.key == selected_key), None)
@@ -422,8 +458,9 @@ def frame_rows(
     prefix: str = "C-b",
     resume_allowed: bool = False,
     current_session: str | None = None,
+    meter: Meter | None = None,
 ) -> list[Row]:
-    """The whole screen: cards (scrolled to keep the selection visible), then the counter and key hints."""
+    """The whole screen: cards (scrolled to keep the selection visible), then the counter, meter and key hints."""
     return frame_layout(
         board,
         selected_key,
@@ -437,6 +474,7 @@ def frame_rows(
         prefix=prefix,
         resume_allowed=resume_allowed,
         current_session=current_session,
+        meter=meter,
     )[0]
 
 

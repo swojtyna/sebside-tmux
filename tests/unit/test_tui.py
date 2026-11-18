@@ -5,7 +5,7 @@ import pytest
 
 from fakes import NOW, FakePane, FakeTmuxServer, record
 from sebside.config import Config
-from sebside.model import OPTION_ID, State
+from sebside.model import OPTION_ID, Meter, State
 from sebside.render import to_plain
 from sebside.store import Store
 from sebside.tmux import Tmux
@@ -439,3 +439,12 @@ def test_x_key_forgets_selected_closed_card_but_never_a_live_one(server, app, st
 def test_store_forget_refuses_open_cards(store):
     store.write(record("open1"))
     assert store.forget("open1")[0] is False and store.load("open1") is not None
+
+
+def test_meter_sits_under_the_counter_in_the_sidebar(server, app, store):
+    store.write_meter(Meter("week", 47, "resets Thu 11:00", app.clock()))
+    app.refresh()
+    painted = [to_plain(row) for row in app.rows(36, 20)]
+    week = next(index for index, row in enumerate(painted) if row.startswith("week "))
+    assert "resets Thu 11:00" in painted[week + 1]
+    assert "waiting" in painted[week - 1] or "nothing needs you" in painted[week - 1] or "working" in painted[week - 1]
