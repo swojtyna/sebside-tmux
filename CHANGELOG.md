@@ -12,7 +12,8 @@ All notable changes to this project are documented here. The format follows
   card file only, after the same ownership checks as resume). Live cards are never removed.
 - A click on a recently closed card resumes it at once (still only allowlisted programs, no shell); Enter asks first,
   and in that confirmation any click cancels.
-- A resumed session closes when its program exits, also on a server with `remain-on-exit on`.
+- A resumed session closes when its program exits, also on a server with `remain-on-exit on`, and the viewer returns
+  to the session it came from. The sidebar's own pane never stays behind dead.
 
 ### Changed
 

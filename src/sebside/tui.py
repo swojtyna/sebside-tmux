@@ -170,6 +170,10 @@ class App:
         if not self.companion_seen or self.tmux.option("@sebside-close-alone") == "off":
             return False
         logger().debug("sidebar %s is alone in %s:%s, closing", self.own_pane, mine.session, mine.window)
+        last_window = all((pane.session, pane.window) == (mine.session, mine.window) for pane in self.panes
+                          if pane.session == mine.session)
+        if last_window and self.tmux.resumed(mine.session):
+            self.tmux.back()  # the session ends with this pane: return the viewer to where it came from
         return True
 
     @property
@@ -437,6 +441,7 @@ def _run(app: App, own_pane: str | None) -> int:
     if own_pane:
         app.own_pane = own_pane
         app.tmux.set_pane_option(own_pane, OPTION_ROLE, SIDEBAR_ROLE)
+        app.tmux.set_pane_option(own_pane, "remain-on-exit", "off")  # never leave a dead sidebar holding the window
     app.prefix = app.tmux.prefix()
     app.store.prune(app.clock())
     fd = sys.stdin.fileno()

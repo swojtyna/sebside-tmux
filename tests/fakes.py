@@ -85,7 +85,7 @@ class FakeTmuxServer:
             return Completed(0, FIELD_SEP.join(values) + "\n", "")
         if command == "set-option":
             index = rest.index("-t")
-            if not rest[index + 1].startswith("%"):  # "=session:" (remain-on-exit of a resumed session)
+            if not rest[index + 1].startswith("%"):  # "=session:": options of a resumed session
                 return Completed(0, "", "")
             pane = self.pane(rest[index + 1])
             positional = rest[index + 2 :]

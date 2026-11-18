@@ -6,8 +6,9 @@ Safety rules, enforced before any process starts:
   into a pane (no `send-keys`), never runs a shell through tmux (no `run-shell`, `if-shell`, `#(...)` formats) and
   never kills anything. `sebside uninstall` alone gets `UNINSTALL_EXTRA` (remove its hooks, key and sidebar panes) and
   `sebside open` alone gets `OPEN_EXTRA` (one `split-window` that starts the sidebar program in a new pane).
-- `set-option` only touches pane-scoped `@sebside_*` options and never with `-F`; the one exception is
-  `remain-on-exit off` on the pane of a session sebside has just resumed, so that pane closes when its program exits.
+- `set-option` only touches pane-scoped `@sebside_*` options and never with `-F`. Exceptions: `remain-on-exit off`
+  on a pane (a resumed program's pane and the sidebar's own pane close when their program exits) and the session
+  marker `@sebside_resumed 1` on a session sebside has just resumed (its sidebar sends the client back on close).
 - `display-message` only with `-p` (print to stdout, nothing shown in a client).
 - An argument ending in `;` is refused, because tmux would read it as a second command.
 - `new-session` is used for exactly one thing: resuming a closed card as an argv list (no shell), detached.
@@ -24,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from .errors import ForbiddenCommand
-from .model import OPTION_ID, OPTION_ROLE, SIDEBAR_ROLE, Pane, Server
+from .model import OPTION_ID, OPTION_RESUMED, OPTION_ROLE, SIDEBAR_ROLE, Pane, Server
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -145,11 +146,13 @@ def _check_split_window(arguments: tuple[str, ...]) -> None:
 
 def _check_set_option(arguments: tuple[str, ...]) -> None:
     flags, positional = split_flags(arguments)
+    if positional == [OPTION_RESUMED, "1"] and flags == ["-t"]:
+        return  # session marker of a session sebside has just resumed
     if "-p" not in flags:
         raise ForbiddenCommand("set-option only with -p (pane scope)")
     if any(flag not in ("-p", "-u", "-q", "-t") for flag in flags):
         raise ForbiddenCommand(f"set-option flags {flags} not allowed: only -p, -u, -q, -t")
-    if positional == ["remain-on-exit", "off"] and "-u" not in flags:
+    if positional == ["remain-on-exit", "off"] and "-u" not in flags and "-p" in flags:
         return
     if not positional or not positional[0].startswith(OWN_OPTION_PREFIX):
         raise ForbiddenCommand(f"set-option may only set {OWN_OPTION_PREFIX}* options (or remain-on-exit off)")
@@ -256,6 +259,8 @@ class TmuxLike(Protocol):
     def sidebar_panes(self, window: str) -> list[str] | None: ...
     def open_sidebar(self, window: str, width: str, command: str) -> Completed: ...
     def new_session(self, name: str, cwd: str | None, argv: tuple[str, ...]) -> Completed: ...
+    def resumed(self, session: str) -> bool: ...
+    def back(self) -> Completed: ...
 
 
 @dataclass(frozen=True)
@@ -367,4 +372,14 @@ class Tmux:
             # A server with `remain-on-exit on` would keep the dead pane (and its window and session) after the
             # resumed program exits; a resumed card should go away with its program, like a fresh session does.
             self.run("set-option", "-p", "-t", f"={name}:", "remain-on-exit", "off")
+            self.run("set-option", "-t", f"={name}:", OPTION_RESUMED, "1")
         return done
+
+    def resumed(self, session: str) -> bool:
+        """True when sebside resumed `session` from a closed card (its session marker is set)."""
+        done = self.run("show-options", "-qv", "-t", f"={session}:", OPTION_RESUMED)
+        return done.ok and done.stdout.strip() == "1"
+
+    def back(self) -> Completed:
+        """Send the client of the calling pane's session to its last session (where it came from)."""
+        return self.run("switch-client", "-l")

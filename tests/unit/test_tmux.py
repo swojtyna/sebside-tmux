@@ -189,14 +189,19 @@ def test_new_session_passes_argv_without_shell(server, tmux):
 
 def test_new_session_turns_remain_on_exit_off_for_its_pane(server, tmux):
     tmux.new_session("job", None, ("vim",))
-    last = server.calls[-1]
-    assert last[last.index("set-option") :] == ["set-option", "-p", "-t", "=job:", "remain-on-exit", "off"]
+    options = [call[call.index("set-option") :] for call in server.calls if "set-option" in call]
+    assert options == [
+        ["set-option", "-p", "-t", "=job:", "remain-on-exit", "off"],
+        ["set-option", "-t", "=job:", "@sebside_resumed", "1"],
+    ]
 
 
 def test_set_option_allows_only_remain_on_exit_off_besides_own_options():
     check_command("set-option", ("-p", "-t", "=job:", "remain-on-exit", "off"))
     for bad in (("-p", "-t", "=job:", "remain-on-exit", "on"), ("-p", "-t", "%1", "status", "off"),
-                ("-g", "remain-on-exit", "off"), ("-pu", "remain-on-exit", "off")):
+                ("-g", "remain-on-exit", "off"), ("-pu", "remain-on-exit", "off"),
+                ("-t", "=job:", "remain-on-exit", "off"), ("-t", "=job:", "@sebside_resumed", "0"),
+                ("-g", "@sebside_resumed", "1")):
         with pytest.raises(ForbiddenCommand):
             check_command("set-option", bad)
 

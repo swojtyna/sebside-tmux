@@ -24,6 +24,7 @@ SCHEMA = 1
 OPTION_ID = "@sebside_id"
 OPTION_STATE = "@sebside_state"
 OPTION_ROLE = "@sebside_role"
+OPTION_RESUMED = "@sebside_resumed"  # session option: sebside resumed this session from a closed card
 SIDEBAR_ROLE = "sidebar"
 
 

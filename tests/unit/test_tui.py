@@ -240,6 +240,26 @@ def test_close_alone_off_keeps_the_sidebar(server, app):
     assert app.alone() is False
 
 
+def test_sidebar_alone_in_a_resumed_session_sends_the_viewer_back(server, app):
+    sidebar, main = sidebar_and_main()
+    alone_app(app, server, sidebar, main)
+    app.alone()
+    server.panes.remove(main)
+    server.tmux_options["@sebside_resumed"] = "1"
+    app.refresh()
+    assert app.alone() is True
+    assert server.calls[-1][-2:] == ["switch-client", "-l"]
+
+
+def test_sidebar_alone_in_a_plain_session_does_not_move_the_viewer(server, app):
+    sidebar, main = sidebar_and_main()
+    alone_app(app, server, sidebar, main)
+    app.alone()
+    server.panes.remove(main)
+    app.refresh()
+    assert app.alone() is True and "switch-client" not in server.commands()
+
+
 def test_unknown_own_pane_never_closes(server, app):
     sidebar, main = sidebar_and_main()
     alone_app(app, server, sidebar, main)
