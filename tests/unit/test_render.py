@@ -178,3 +178,12 @@ def test_live_cards_are_never_dimmed_but_closed_ones_are():
         assert not style.dim and style.bold
     closed = card(State.QUIET, live=False)
     assert card_rows(closed, 36, False, Config(), NOW)[0][5][1].dim
+
+
+def test_done_description_is_green_even_when_closed():
+    for live in (True, False):
+        third = card_rows(card(State.DONE, desc="gotowe", live=live), 36, False, Config(), NOW)[2]
+        style = next(style for text, style in third if text == "g")
+        assert style.fg == "green" and style.bold and not style.dim
+    working = card_rows(card(State.WORKING, desc="pracuje"), 36, False, Config(), NOW)[2]
+    assert next(style for text, style in working if text == "p").dim
