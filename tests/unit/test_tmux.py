@@ -183,7 +183,22 @@ def test_show_stops_when_switch_fails(server, tmux):
 
 def test_new_session_passes_argv_without_shell(server, tmux):
     tmux.new_session("job", "/tmp", ("vim", "a b.txt"))
-    assert server.calls[-1][3:] == ["new-session", "-d", "-s", "job", "-c", "/tmp", "--", "vim", "a b.txt"]
+    new = next(argv for argv in server.calls if "new-session" in argv)
+    assert new[new.index("new-session") :] == ["new-session", "-d", "-s", "job", "-c", "/tmp", "--", "vim", "a b.txt"]
+
+
+def test_new_session_turns_remain_on_exit_off_for_its_pane(server, tmux):
+    tmux.new_session("job", None, ("vim",))
+    last = server.calls[-1]
+    assert last[last.index("set-option") :] == ["set-option", "-p", "-t", "=job:", "remain-on-exit", "off"]
+
+
+def test_set_option_allows_only_remain_on_exit_off_besides_own_options():
+    check_command("set-option", ("-p", "-t", "=job:", "remain-on-exit", "off"))
+    for bad in (("-p", "-t", "=job:", "remain-on-exit", "on"), ("-p", "-t", "%1", "status", "off"),
+                ("-g", "remain-on-exit", "off"), ("-pu", "remain-on-exit", "off")):
+        with pytest.raises(ForbiddenCommand):
+            check_command("set-option", bad)
 
 
 def test_prefix_falls_back_to_c_b():

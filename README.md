@@ -17,8 +17,8 @@ sebside keeps a narrow pane on the left with one card per session or task:
 - **done** (green ✔) means finished; it turns quiet once you have looked at it.
 - **quiet** (grey ○) and **unknown** (grey ?) show their state in the bar and icon only; the text of a live card is
   never dimmed.
-- Recently closed cards stay at the bottom, dimmed and greyed, and can be resumed with Enter. The `✕` at the right
-  end of their first line (or `x` / Delete) forgets one.
+- Recently closed cards stay at the bottom, dimmed and greyed, and resume with a click (or Enter, which asks
+  first); `x` / Delete forgets one.
 
 It works with plain tmux out of the box (session name, directory, current command, last activity). Any program can
 make its card richer with one command: `sebside card set --id build --state working --desc "compiling"`.
@@ -76,7 +76,7 @@ sidebar knows which pane the card belongs to and your status line can show the s
 | `--subtitle` | `subtitle` | line 2, dimmed | pane directory |
 | `--desc` | `desc` | line 3, dimmed, cut with … (max 300 characters) | current command |
 | `--extra` | `extra` | right side of line 2 (line 1 when `show_age = false`) | nothing |
-| `--resume` | `resume` (argv list) | Enter on a closed card | not resumable |
+| `--resume` | `resume` (argv list) | click or Enter on a closed card | not resumable |
 | `--cwd` | `cwd` | directory for resume | current directory |
 | (automatic) | `tmux`: socket, server pid, pane | which pane is live | `null` outside tmux |
 | (automatic) | `schema`, `rev`, `created_at`, `updated_at`, `closed_at` | age on the right | |
@@ -90,8 +90,9 @@ server pid differs. A card set outside tmux has no pane, is shown without one, a
 
 **Stale.** A card whose last update and last pane output are both older than `stale_hours` is shown as unknown.
 
-**Resume.** `--resume "agent --resume 1234"` is split into words and stored as a list. Enter on a closed card shows
-the exact command first and runs it after a second Enter, in a new detached tmux session, without a shell. Only
+**Resume.** `--resume "agent --resume 1234"` is split into words and stored as a list. A click on a closed card runs it at
+once; Enter shows the exact command first and runs it after a second Enter. Either way it runs in a new detached tmux
+session, without a shell, and that session closes when the program exits. Only
 programs listed in `resume_programs` in the config can be resumed, and only from card files owned by you with no
 group or other permissions. If a live card with the same id exists, Enter switches to it instead.
 The allowlist covers the program, not its arguments: anything that can write a card file decides the arguments, so

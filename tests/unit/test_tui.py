@@ -307,16 +307,31 @@ def test_click_on_recently_closed_header_does_nothing(server, app, store):
     assert app.selected_key == "pane:%2" and app.mode == "list"
 
 
-def test_click_on_closed_card_asks_first_and_clicks_never_confirm(server, app, store):
+def test_click_on_closed_card_resumes_at_once(server, app, store):
     _closed_app(server, app, store, ("agent", "--resume", "c1"))
     app.selected_key = "pane:%2"
     app.rows(36, 40)
-    row = app.row_keys.index("closed:c1")
-    app.handle_key(f"click:{row}")
-    assert app.mode == "confirm" and app.selected_key == "closed:c1"
+    app.handle_key(f"click:{app.row_keys.index('closed:c1')}")
+    new = next(argv for argv in server.calls if "new-session" in argv)
+    assert new[new.index("--") + 1 :] == ["agent", "--resume", "c1"]
+    assert app.mode == "list" and app.message == "resumed in session agent-one"
+
+
+def test_click_cancels_the_confirmation_that_enter_opened(server, app, store):
+    _closed_app(server, app, store, ("agent", "--resume", "c1"))
+    app.handle_key("enter")
+    assert app.mode == "confirm"
     app.rows(36, 40)
-    app.handle_key("click:0:0")  # any click cancels, it never runs the resume
+    app.handle_key("click:0:0")
     assert app.mode == "list" and "new-session" not in server.commands()
+
+
+def test_click_on_closed_card_with_disallowed_program_runs_nothing(server, app, store):
+    _closed_app(server, app, store, ("bash", "-c", "rm -rf ~"))
+    app.selected_key = "pane:%2"
+    app.rows(36, 40)
+    app.handle_key(f"click:{app.row_keys.index('closed:c1')}")
+    assert "new-session" not in server.commands() and "resume refused" in app.message
 
 
 def test_wheel_moves_the_selection(server, app):
@@ -380,25 +395,16 @@ def _closed_rows(server, app, store):
     return app.row_keys.index("closed:c1")
 
 
-def test_closed_card_shows_a_cross_on_its_first_line_only(server, app, store):
+def test_closed_card_has_no_cross(server, app, store):
     row = _closed_rows(server, app, store)
     painted = [to_plain(r) for r in app.rows(36, 40)]
-    assert painted[row].rstrip().endswith("✕") and "✕" not in "".join(painted[:row] + painted[row + 1 :])
-    assert app.row_forgets[row] and not any(app.row_forgets[:row])
+    assert "✕" not in "".join(painted) and app.row_keys[row] == "closed:c1"
 
 
-def test_click_on_the_cross_forgets_the_closed_card(server, app, store):
+def test_click_at_the_right_edge_of_a_closed_card_resumes_it(server, app, store):
     row = _closed_rows(server, app, store)
     app.handle_key(f"click:{row}:34")
-    assert store.load("c1") is None and app.mode == "list"
-    assert "closed:c1" not in [card.key for card in app.board.cards]
-    assert app.selected_key is not None
-
-
-def test_click_left_of_the_cross_still_asks_to_resume(server, app, store):
-    row = _closed_rows(server, app, store)
-    app.handle_key(f"click:{row}:10")
-    assert app.mode == "confirm" and store.load("c1") is not None
+    assert "new-session" in server.commands() and store.load("c1") is not None
 
 
 def test_x_key_forgets_selected_closed_card_but_never_a_live_one(server, app, store):

@@ -164,7 +164,7 @@ def test_file_name_must_match_card_id(store: Store):
 # 14: a one-word resume command is never run through sh -c
 def test_single_word_resume_runs_without_shell(server: FakeTmuxServer, tmux: Tmux):
     tmux.new_session("job", None, ("agent",))
-    argv = server.calls[-1]
+    argv = next(call for call in server.calls if "new-session" in call)
     assert argv[argv.index("--") + 1 :] == ["env", "--", "agent"]
 
 

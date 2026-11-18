@@ -27,7 +27,7 @@ from .cards import Board, build, newly_seen, reconcile, server_of
 from .errors import SebsideError
 from .log import logger
 from .model import OPTION_ROLE, SIDEBAR_ROLE, Card, Pane, State
-from .render import FORGET_COLUMNS, Row, clean, frame_layout, to_ansi
+from .render import Row, clean, frame_layout, to_ansi
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -123,8 +123,6 @@ class App:
     reload: bool = False  # the installed code changed: restart this process once the terminal is restored
     companion_seen: bool = False  # a non-sidebar pane has shared this window with us at least once
     row_keys: list[str | None] = field(default_factory=list)  # card key under each screen row, as last painted
-    row_forgets: list[bool] = field(default_factory=list)  # rows that carry a ✕, as last painted
-    row_width: int = 0
 
     # data --------------------------------------------------------------------------------------------
     def refresh(self) -> None:
@@ -205,8 +203,8 @@ class App:
         return True
 
     def _click(self, row: int, column: int | None = None) -> None:
-        """A click cancels the resume confirmation. In the list it hits the ✕ of a closed card (forget it) or selects
-        and activates the card under the row. A click never confirms a resume."""
+        """A click cancels the resume confirmation. In the list it selects the card under the row and activates it: a
+        live card is shown, a closed one is resumed at once (Enter on a closed card asks first)."""
         if self.mode == "confirm":
             self.mode, self.message = "list", ""
             return
@@ -214,11 +212,7 @@ class App:
             return
         self.message = ""
         self.selected_key = self.row_keys[row]
-        on_forget = column is not None and self.row_forgets[row] and column >= self.row_width - FORGET_COLUMNS
-        if on_forget:
-            self.forget_selected()
-        else:
-            self.activate()
+        self.activate(confirm=False)
 
     def forget_selected(self) -> None:
         """Drop the selected closed card from the history (its own card file only); the selection stays nearby."""
@@ -245,7 +239,8 @@ class App:
         self.selected_key = keys[max(0, min(len(keys) - 1, index))]
 
     # actions -----------------------------------------------------------------------------------------
-    def activate(self) -> None:
+    def activate(self, *, confirm: bool = True) -> None:
+        """Show a live card; resume a closed one, after the confirmation screen unless `confirm` is False."""
         card = self.selected
         if card is None:
             return
@@ -257,8 +252,10 @@ class App:
             self.show(twin)
         elif not card.resume:
             self.message = "this card has no resume command"
-        else:
+        elif confirm:
             self.mode = "confirm"
+        else:
+            self.run_resume()
 
     def show(self, card: Card) -> None:
         if not card.in_tmux or not card.session:
@@ -317,8 +314,7 @@ class App:
 
     # drawing -----------------------------------------------------------------------------------------
     def rows(self, width: int, height: int, frame: int = 0) -> list[Row]:
-        self.row_width = width
-        rows, self.row_keys, self.row_forgets = frame_layout(
+        rows, self.row_keys = frame_layout(
             self.board,
             self.selected_key,
             width,

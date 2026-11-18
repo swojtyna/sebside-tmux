@@ -6,7 +6,8 @@ Safety rules, enforced before any process starts:
   into a pane (no `send-keys`), never runs a shell through tmux (no `run-shell`, `if-shell`, `#(...)` formats) and
   never kills anything. `sebside uninstall` alone gets `UNINSTALL_EXTRA` (remove its hooks, key and sidebar panes) and
   `sebside open` alone gets `OPEN_EXTRA` (one `split-window` that starts the sidebar program in a new pane).
-- `set-option` only touches pane-scoped `@sebside_*` options and never with `-F`.
+- `set-option` only touches pane-scoped `@sebside_*` options and never with `-F`; the one exception is
+  `remain-on-exit off` on the pane of a session sebside has just resumed, so that pane closes when its program exits.
 - `display-message` only with `-p` (print to stdout, nothing shown in a client).
 - An argument ending in `;` is refused, because tmux would read it as a second command.
 - `new-session` is used for exactly one thing: resuming a closed card as an argv list (no shell), detached.
@@ -148,8 +149,10 @@ def _check_set_option(arguments: tuple[str, ...]) -> None:
         raise ForbiddenCommand("set-option only with -p (pane scope)")
     if any(flag not in ("-p", "-u", "-q", "-t") for flag in flags):
         raise ForbiddenCommand(f"set-option flags {flags} not allowed: only -p, -u, -q, -t")
+    if positional == ["remain-on-exit", "off"] and "-u" not in flags:
+        return
     if not positional or not positional[0].startswith(OWN_OPTION_PREFIX):
-        raise ForbiddenCommand(f"set-option may only set {OWN_OPTION_PREFIX}* options")
+        raise ForbiddenCommand(f"set-option may only set {OWN_OPTION_PREFIX}* options (or remain-on-exit off)")
 
 
 # list-panes format, built from a field list ------------------------------------------------------
@@ -359,4 +362,9 @@ class Tmux:
         if len(argv) == 1:
             # tmux runs a single argument through `sh -c`; `env -- prog` keeps it a plain exec without a shell.
             argv = ("env", "--", argv[0])
-        return self.run("new-session", *arguments, "--", *argv)
+        done = self.run("new-session", *arguments, "--", *argv)
+        if done.ok:
+            # A server with `remain-on-exit on` would keep the dead pane (and its window and session) after the
+            # resumed program exits; a resumed card should go away with its program, like a fresh session does.
+            self.run("set-option", "-p", "-t", f"={name}:", "remain-on-exit", "off")
+        return done

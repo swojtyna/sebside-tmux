@@ -19,8 +19,6 @@ if TYPE_CHECKING:
 BAR = "▌"
 RULE = "─"
 ELLIPSIS = "…"
-FORGET = "✕"  # at the right edge of a closed card's first line: click to drop it from the history
-FORGET_COLUMNS = 3  # click area, counted from the right edge
 HERE = "●"  # marks the card of the session this sidebar sits in
 
 
@@ -138,13 +136,6 @@ def color_of(card: Card, config: Config) -> str:
     return config.colors["closed"] if not card.live else config.colors[card.state.value]
 
 
-def _first_right(when: str, forget: bool, style: Style) -> list[Span]:
-    """Right side of line 1: the time, and on closed cards the ✕ that forgets the card."""
-    if not forget:
-        return [(when, style)]
-    return [(when + ("  " if when else ""), style), (FORGET, Style(style.fg, bold=True))]
-
-
 def _second_right(extra: str, here: bool, extra_style: Style, dot_style: Style) -> list[Span] | None:
     """Right side of line 2: the extra text, then the "you are here" dot (a space apart from the extra)."""
     spans: list[Span] = [(extra, extra_style)] if extra else []
@@ -177,8 +168,7 @@ def card_rows(
     else:  # no age: the extra text (e.g. context left) takes its place on the first line
         when = clip(card.extra, max(body // 3, 0)) if card.extra else ""
         extra = ""
-    forget = not card.live
-    title = clip(card.title, body - text_width(when) - 1 - (3 if forget else 0))
+    title = clip(card.title, body - text_width(when) - 1)
     reserved = (text_width(extra) + 1 if extra else 0) + (2 if here else 0)
     subtitle = clip(card.subtitle, body - reserved)
     desc = clip(card.desc, body)
@@ -191,7 +181,7 @@ def card_rows(
             (" ", Style()),
             (title, Style(text, bold=not quiet, dim=quiet)),
         ],
-        _first_right(when, forget, Style(text, bold=not quiet, dim=quiet)),
+        [(when, Style(text, bold=not quiet, dim=quiet))],
         bg,
     )
     second = line(
@@ -338,37 +328,34 @@ def body_layout(
     now: float,
     frame: int,
     current_session: str | None = None,
-) -> tuple[list[Row], tuple[int, int], list[str | None], list[bool]]:
-    """All card rows, the row span of the selected card (for scrolling), the card key of every row (None for
-    rows that belong to no card, such as the "recently closed" header) and which rows carry a ✕."""
+) -> tuple[list[Row], tuple[int, int], list[str | None]]:
+    """All card rows, the row span of the selected card (for scrolling) and the card key of every row (None for
+    rows that belong to no card, such as the "recently closed" header)."""
     rows: list[Row] = []
     keys: list[str | None] = []
-    forgets: list[bool] = []
     span = (0, 0)
     muted = Style(config.colors["muted"], dim=True)
     if not board.cards:
-        return [line(width, [("No tmux sessions to show.", muted)])], span, [None], [False]
+        return [line(width, [("No tmux sessions to show.", muted)])], span, [None]
     for index, card in enumerate(board.cards):
         if index == len(board.live) and board.history:
             rows.append(line(width, [("recently closed", muted)]))
             keys.append(None)
-            forgets.append(False)
         start = len(rows)
         rows += card_rows(
             card, width, card.key == selected_key, config, now, frame, current_session=current_session
         )
         keys += [card.key] * (len(rows) - len(keys))
-        forgets += [not card.live] + [False] * (len(rows) - len(forgets) - 1)
         if card.key == selected_key:
             span = (start, len(rows))
-    return rows, span, keys, forgets
+    return rows, span, keys
 
 
 def body_rows(
     board: Board, selected_key: str | None, width: int, config: Config, now: float, frame: int
 ) -> tuple[list[Row], tuple[int, int]]:
     """All card rows, and the row span of the selected card (for scrolling)."""
-    rows, span, _, _ = body_layout(board, selected_key, width, config, now, frame)
+    rows, span, _ = body_layout(board, selected_key, width, config, now, frame)
     return rows, span
 
 
@@ -386,9 +373,9 @@ def frame_layout(
     prefix: str = "C-b",
     resume_allowed: bool = False,
     current_session: str | None = None,
-) -> tuple[list[Row], list[str | None], list[bool]]:
-    """The whole screen and, per screen row, the card key under it (None for anything else) and whether the row
-    carries a ✕. Cards are scrolled to keep the selection visible, then come the counter and key hints."""
+) -> tuple[list[Row], list[str | None]]:
+    """The whole screen and, per screen row, the card key under it (None for anything else). Cards are scrolled to
+    keep the selection visible, then come the counter and key hints."""
     footer: list[Row] = []
     if message:
         footer.append(line(width, [(clip(message, width - 1), Style(config.colors["text"], bold=True))], margin=False))
@@ -398,30 +385,26 @@ def frame_layout(
     room = max(height - len(footer), 0)
     selected = next((card for card in board.cards if card.key == selected_key), None)
     body_keys: list[str | None] = []
-    body_forgets: list[bool] = []
     if mode == "explain":
         body = explain_rows(selected, width, config, now)[:room]
     elif mode == "confirm":
         body = confirm_rows(selected, width, config, resume_allowed)[:room]
     else:
-        rows, (start, end), keys, forgets = body_layout(
+        rows, (start, end), keys = body_layout(
             board, selected_key, width, config, now, frame, current_session
         )
         offset = max(0, end - room) if end > room else 0
         offset = min(offset, start)
         body = rows[offset : offset + room]
         body_keys = keys[offset : offset + room]
-        body_forgets = forgets[offset : offset + room]
     body_keys += [None] * (room - len(body_keys))
-    body_forgets += [False] * (room - len(body_forgets))
     body += [line(width, [])] * (room - len(body))
     if height <= 0:
-        return [], [], []
+        return [], []
     tail = len(footer)
     return (
         (body + footer)[-height:],
         (body_keys + [None] * tail)[-height:],
-        (body_forgets + [False] * tail)[-height:],
     )
 
 

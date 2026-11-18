@@ -8,9 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- A clickable `✕` at the right edge of every recently closed card, and the `x` / Delete key, forget that card (its own
+- The `x` / Delete key forgets the selected recently closed card (its own
   card file only, after the same ownership checks as resume). Live cards are never removed.
-- In the resume confirmation any mouse click cancels (Esc/click); only Enter or `y` runs the resume.
+- A click on a recently closed card resumes it at once (still only allowlisted programs, no shell); Enter asks first,
+  and in that confirmation any click cancels.
+- A resumed session closes when its program exits, also on a server with `remain-on-exit on`.
 
 ### Changed
 
