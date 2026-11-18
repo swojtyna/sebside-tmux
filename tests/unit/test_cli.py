@@ -7,7 +7,7 @@ import pytest
 from fakes import SERVER_PID, SOCKET, FakePane, FakeTmuxServer
 from sebside import cli
 from sebside.errors import EXIT_STATE, EXIT_TMUX, EXIT_USAGE
-from sebside.model import OPTION_ID, OPTION_STATE, State
+from sebside.model import OPTION_ID, OPTION_ROLE, OPTION_STATE, State
 from sebside.store import Store
 from sebside.tmux import Tmux
 
@@ -31,10 +31,11 @@ def in_tmux(env: dict[str, str]) -> dict[str, str]:
 def fake(monkeypatch: pytest.MonkeyPatch) -> FakeTmuxServer:
     server = FakeTmuxServer([FakePane("%4", "work")])
 
-    def create(socket: Path | None = None, *, uninstall: bool = False) -> Tmux:
-        from sebside.tmux import ALLOWED, UNINSTALL_EXTRA
+    def create(socket: Path | None = None, *, uninstall: bool = False, opener: bool = False) -> Tmux:
+        from sebside.tmux import ALLOWED, OPEN_EXTRA, UNINSTALL_EXTRA
 
-        return Tmux(socket, server, allowed=ALLOWED | UNINSTALL_EXTRA if uninstall else ALLOWED)
+        allowed = ALLOWED | (UNINSTALL_EXTRA if uninstall else frozenset()) | (OPEN_EXTRA if opener else frozenset())
+        return Tmux(socket, server, allowed=allowed)
 
     monkeypatch.setattr(cli.Tmux, "create", staticmethod(create))
     monkeypatch.setattr(cli.Tmux, "available", staticmethod(lambda: True))
@@ -182,3 +183,49 @@ def test_uninstall_removes_only_sebside_things(fake, in_tmux):
     kill = next(argv for argv in fake.calls if "kill-pane" in argv)
     assert kill[-1] == "%9"
     assert OPTION_ID not in fake.pane("%4").options
+
+
+# sebside open ------------------------------------------------------------------------------------
+def test_open_adds_a_sidebar_pane_left_full_height_without_focus(fake, in_tmux):
+    assert cli.main(["open", "--if-missing", "--target", "@0"], in_tmux) == 0
+    split = next(argv for argv in fake.calls if "split-window" in argv)
+    assert split[split.index("-t") + 1] == "@0"
+    assert {"-h", "-b", "-f", "-d"} <= set(split)
+    assert split[split.index("-l") + 1] == "36"
+    assert split[-1].endswith("sidebar")
+    new = fake.panes[-1]
+    assert new.options[OPTION_ROLE] == "sidebar"
+
+
+def test_open_if_missing_is_idempotent_and_quiet(fake, in_tmux, capsys):
+    cli.main(["open", "--if-missing", "--target", "@0"], in_tmux)
+    before = len(fake.panes)
+    assert cli.main(["open", "--if-missing", "--target", "@0"], in_tmux) == 0
+    assert len(fake.panes) == before
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+def test_open_without_if_missing_refuses_a_second_sidebar(fake, in_tmux):
+    cli.main(["open", "--target", "@0"], in_tmux)
+    assert cli.main(["open", "--target", "@0"], in_tmux) == EXIT_USAGE
+
+
+def test_open_uses_the_target_option_width_capped_under_half(fake, in_tmux):
+    fake.tmux_options["@sebside-width"] = "25%"
+    cli.main(["open", "--target", "@0"], in_tmux)
+    split = next(argv for argv in fake.calls if "split-window" in argv)
+    assert split[split.index("-l") + 1] == "25%"
+
+
+def test_open_rejects_a_target_that_is_not_an_id(fake, in_tmux):
+    assert cli.main(["open", "--target", "x; kill-server"], in_tmux) == EXIT_USAGE
+    assert not any("split-window" in argv for argv in fake.calls)
+
+
+def test_open_without_target_outside_tmux_is_a_usage_error(fake, env):
+    assert cli.main(["open", "--if-missing"], env) == EXIT_USAGE
+
+
+def test_open_reports_an_unknown_window(fake, in_tmux):
+    assert cli.main(["open", "--if-missing", "--target", "@9"], in_tmux) == EXIT_TMUX

@@ -99,6 +99,8 @@ class App:
     mode: str = "list"  # list | explain | confirm
     message: str = ""
     prefix: str = "C-b"
+    own_pane: str = ""  # this sidebar's pane id (from $TMUX_PANE); empty when unknown
+    companion_seen: bool = False  # a non-sidebar pane has shared this window with us at least once
 
     # data --------------------------------------------------------------------------------------------
     def refresh(self) -> None:
@@ -131,6 +133,22 @@ class App:
             self.selected_key = keys[0] if keys else None
             if self.mode == "confirm":
                 self.mode = "list"
+
+    def alone(self) -> bool:
+        """True when the sidebar must close itself: every pane left in its window is a sidebar, after a main pane was
+        there once, and `@sebside-close-alone` is not `off`. Never true while a main pane is in the window. The
+        sidebar only ends its own process: nothing is killed, so tmux closes the pane, window and session itself."""
+        mine = next((pane for pane in self.panes if pane.pane_id == self.own_pane), None)
+        if mine is None:
+            return False
+        window = [pane for pane in self.panes if (pane.session, pane.window) == (mine.session, mine.window)]
+        if any(pane.role != SIDEBAR_ROLE for pane in window):
+            self.companion_seen = True
+            return False
+        if not self.companion_seen or self.tmux.option("@sebside-close-alone") == "off":
+            return False
+        logger().debug("sidebar %s is alone in %s:%s, closing", self.own_pane, mine.session, mine.window)
+        return True
 
     @property
     def selected(self) -> Card | None:
@@ -184,7 +202,9 @@ class App:
         if not card.in_tmux or not card.session:
             self.message = "this card was set outside tmux: nothing to switch to"
             return
-        done = self.tmux.show(card.session, card.window, card.pane_id)
+        done = self.tmux.show(
+            card.session, card.window, card.pane_id, focus_main=self.tmux.option("@sebside-focus") == "main"
+        )
         if not done.ok:
             self.message = f"cannot switch: {done.error}"
             return
@@ -288,6 +308,7 @@ def run(app: App, own_pane: str | None = None) -> int:
         print("sebside: the sidebar needs a terminal: run it inside a tmux pane", file=sys.stderr)
         return 2
     if own_pane:
+        app.own_pane = own_pane
         app.tmux.set_pane_option(own_pane, OPTION_ROLE, SIDEBAR_ROLE)
     app.prefix = app.tmux.prefix()
     app.store.prune(app.clock())
@@ -310,6 +331,8 @@ def run(app: App, own_pane: str | None = None) -> int:
             if time.monotonic() - last_poll >= app.config.refresh_seconds or stamp != last_stamp:
                 app.refresh()
                 last_poll, last_stamp = time.monotonic(), app.store.dir_stamp()
+                if app.alone():
+                    return 0
             if resized.flag:
                 resized.flag = False
                 last_paint = ""

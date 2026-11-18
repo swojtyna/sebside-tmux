@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-18
+
+### Added
+
+- `sebside open --if-missing [--target WINDOW_ID]`: opens the sidebar pane on the left of a window, full height,
+  without taking focus, only when the window has no sidebar yet. Idempotent and quiet; exit 0 when already present.
+- tmux option `@sebside-auto on` (default `off`): opens the sidebar automatically in every new session and window,
+  through `session-created[96]` and `after-new-window[98]` hooks at fixed indexes (re-sourcing is idempotent and your
+  own hooks are never touched). With the option off the two hooks are removed. `sebside uninstall` removes them too.
+- tmux option `@sebside-focus main`: after Enter switches to another session, the cursor lands in a main (non-sidebar)
+  pane of the target window instead of the sidebar. Unset keeps the 0.1 behaviour.
+- The sidebar closes itself when it is the last pane left in its window (every remaining pane is a sidebar and a main
+  pane shared the window with it before), so the window and session end normally and tmux's own `detach-on-destroy`
+  decides what your client does. On by default; `set -g @sebside-close-alone off` disables it (read at runtime, no
+  reload needed). The sidebar only exits its own process: it never kills a pane, and it never closes while a main pane
+  is in the window. It notices on its next refresh, so closing takes up to `refresh_seconds` (1.5 s by default).
+- Integration tests for the new options on a private tmux server.
+
+### Changed
+
+- The tmux allowlist gains `split-window`, available only to `sebside open` (new pane, one command, no other flags).
+
 ## [0.1.0] - 2026-11-18
 
 ### Added

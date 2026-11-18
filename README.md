@@ -146,6 +146,48 @@ tmux options, set them **before** the plugin line in `tmux.conf`:
 | `@sebside-key` | `S` | key after the prefix that toggles the sidebar (`S` is bound only if it is free) |
 | `@sebside-width` | config `width` | sidebar width in columns or percent (`25%`, tmux 3.1+), always under half the window |
 | `@sebside-hook` | `on` | `off` skips the `session-closed[97]` hook |
+| `@sebside-auto` | `off` | `on` opens the sidebar in every new session and window (see below) |
+| `@sebside-close-alone` | `on` | `off` keeps a sidebar open when it is the last pane in its window (see below) |
+| `@sebside-focus` | (unset) | `main`: after Enter switches session, the cursor lands in the main pane, not the sidebar |
+
+### Opening the sidebar automatically
+
+Enter on a card switches your client to another session. If each tool or agent runs in its own session, that
+session needs a sidebar too, or it disappears after the switch. Two ways to get one:
+
+```tmux
+set -g @sebside-auto on     # before the plugin line
+```
+
+installs two hooks at fixed array indexes, so they never replace your own hooks and reloading `tmux.conf` is safe:
+
+```tmux
+set-hook -g session-created[96] 'run-shell -b "sebside --socket <socket> open --if-missing --target #{window_id}"'
+set-hook -g after-new-window[98] 'run-shell -b "sebside --socket <socket> open --if-missing --target #{window_id}"'
+```
+
+(the plugin writes the real, quoted command). Only new sessions and windows get a sidebar; existing ones keep
+what they have (press `prefix + S` there). Set the option back to `off` and reload to remove both hooks.
+
+### Closing when the main program ends
+
+When the program in the main pane exits (or you close that pane), the sidebar would keep the window and session
+alive. So a sidebar that finds itself alone in its window, after a main pane was there once, ends its own process
+within one refresh; tmux then closes the window and session as usual, and its `detach-on-destroy` option decides what
+your client does. It never closes while any main pane remains in the window, and it never kills a pane (it only
+exits). A sidebar started by itself in an otherwise empty window stays. `set -g @sebside-close-alone off` turns this
+off; the option is read when the sidebar is about to close, so it takes effect without a reload.
+
+You can also run it yourself: `sebside open --if-missing` adds the sidebar on the left of the current window (or of
+`--target @3`) only if that window has none. It is quiet, safe to repeat, and exits 0 when the sidebar is already
+there. The new pane does not take focus.
+
+```tmux
+set -g @sebside-focus main  # before the plugin line
+```
+
+keeps the cursor out of the sidebar: after Enter switches session, sebside selects the card's pane, or the first
+pane that is not a sidebar if the card's pane is one. Without the option the focus stays as tmux leaves it.
 
 ## Integrations
 
@@ -202,9 +244,9 @@ when something calls `sebside card set`.
 
 **Can it type into my sessions or kill them?** No. The sidebar only reads tmux and switches your client to the card
 you pick, through an explicit, tested allowlist of tmux commands. It never sends keys, never runs a shell through
-tmux and never kills anything. The explicit exceptions: Enter on a closed card starts a new session for its resume
-command (after you confirm), the plugin's toggle key closes the sidebar pane, and `sebside uninstall` removes
-sebside's own hook, key and sidebar panes.
+tmux and never kills anything. (A sidebar left alone in its window exits by itself; that ends only its own process.) The explicit exceptions: Enter on a closed card starts a new session for its resume
+command (after you confirm), the plugin's toggle key closes the sidebar pane, `sebside open` (and the optional auto-open hooks) adds a sidebar
+pane, and `sebside uninstall` removes sebside's own hooks, key and sidebar panes.
 
 **The colors look wrong.** sebside uses your terminal's 16 ANSI colors. Change them in your terminal theme, or
 override them per state in `[colors]`.

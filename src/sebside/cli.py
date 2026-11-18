@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
+import shutil
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -87,6 +89,12 @@ def _parser() -> argparse.ArgumentParser:
     get = config.add_parser("get", parents=[common], help="print one value, e.g. width")
     get.add_argument("key")
 
+    open_ = commands.add_parser("open", parents=[common], help="open the sidebar pane in a window")
+    open_.add_argument(
+        "--if-missing", action="store_true", help="only when the window has no sidebar (quiet, idempotent)"
+    )
+    open_.add_argument("--target", help="window id (default: the window of $TMUX_PANE)")
+
     commands.add_parser(
         "uninstall", parents=[common], help="remove sebside's tmux hook, key binding, sidebar panes and pane options"
     )
@@ -102,9 +110,11 @@ def _socket(args: argparse.Namespace, env: Mapping[str, str]) -> Path | None:
     return Path(server.socket) if server else None
 
 
-def _tmux(args: argparse.Namespace, env: Mapping[str, str], *, uninstall: bool = False) -> Tmux:
+def _tmux(args: argparse.Namespace, env: Mapping[str, str], *, uninstall: bool = False, opener: bool = False) -> Tmux:
     if not Tmux.available():
         raise TmuxError("tmux not found: install tmux 3.0 or newer")
+    if opener:
+        return Tmux.create(_socket(args, env), opener=True)
     return Tmux.create(_socket(args, env), uninstall=uninstall)
 
 
@@ -314,6 +324,51 @@ def run_uninstall(ctx: Context, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+TARGET = re.compile(r"^[@%$][0-9]+$")
+WIDTH = re.compile(r"^([0-9]+)(%?)$")
+
+
+def _sidebar_command(env: Mapping[str, str]) -> str:
+    """The command that runs the sidebar in its pane: this very program, quoted for sh."""
+    own = Path(sys.argv[0])
+    candidates = [env.get("SEBSIDE_BIN", ""), os.fspath(own) if own.name == "sebside" and own.is_absolute() else ""]
+    program = next((c for c in candidates if c and os.access(c, os.X_OK)), "") or shutil.which(
+        "sebside", path=env.get("PATH")
+    )
+    argv = [program, "sidebar"] if program else [sys.executable, "-m", "sebside", "sidebar"]
+    return shlex.join(argv)
+
+
+def _open_width(tmux: Tmux, configured: int, window: str) -> str:
+    """Width for the new pane: `@sebside-width` (columns or percent) or the config, always under half the window."""
+    match = WIDTH.match(tmux.option("@sebside-width"))
+    value, percent = (int(match.group(1)), match.group(2) == "%") if match else (configured, False)
+    if percent:
+        return f"{max(1, min(value, 49))}%"
+    done = tmux.display(window, "#{window_width}")
+    total = int(done.stdout.strip()) if done.ok and done.stdout.strip().isdigit() else 80
+    return str(max(10, min(value, total // 2 - 1)))
+
+
+def run_open(ctx: Context, args: argparse.Namespace) -> int:
+    target = args.target or (ctx.env.get("TMUX_PANE", "") if ctx.env.get("TMUX") else "")
+    if not target or not TARGET.match(target):
+        raise UsageError("open needs --target (a window id like @3) or must run inside a tmux pane")
+    tmux = _tmux(args, ctx.env, opener=True)
+    existing = tmux.sidebar_panes(target)
+    if existing is None:
+        raise TmuxError(f"cannot read window {target}")
+    if existing:
+        if args.if_missing:
+            return EXIT_OK
+        raise UsageError(f"window {target} already has a sidebar")
+    width = _open_width(tmux, _config(args, ctx.env).width, target)
+    done = tmux.open_sidebar(target, width, _sidebar_command(ctx.env))
+    if not done.ok:
+        raise TmuxError(f"cannot open the sidebar: {done.error}")
+    return EXIT_OK
+
+
 def run_sidebar(ctx: Context, args: argparse.Namespace) -> int:
     socket = _socket(args, ctx.env)
     if socket is None:
@@ -330,6 +385,7 @@ COMMANDS: dict[str, Command] = {
     "reconcile": run_reconcile,
     "config": run_config,
     "uninstall": run_uninstall,
+    "open": run_open,
 }
 
 

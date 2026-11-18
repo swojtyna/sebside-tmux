@@ -188,3 +188,53 @@ def test_new_session_passes_argv_without_shell(server, tmux):
 
 def test_prefix_falls_back_to_c_b():
     assert Tmux(None, lambda argv, timeout: Completed(1, "", "no server")).prefix() == "C-b"
+
+
+def test_split_window_is_only_for_the_opener():
+    with pytest.raises(ForbiddenCommand):
+        check_command("split-window", ("-t", "@1", "x"))
+    from sebside.tmux import OPEN_EXTRA
+
+    allowed = ALLOWED | OPEN_EXTRA
+    check_command(
+        "split-window",
+        ("-h", "-b", "-f", "-d", "-l", "36", "-t", "@1", "-P", "-F", "#{pane_id}", "sebside sidebar"),
+        allowed,
+    )
+    for bad in (("-t", "@1"), ("-t", "@1", "a", "b"), ("-e", "X=1", "-t", "@1", "a"), ("-h", "a")):
+        with pytest.raises(ForbiddenCommand):
+            check_command("split-window", bad, allowed)
+
+
+def test_own_hooks_include_the_auto_open_hooks():
+    check_command("set-hook", ("-gu", "session-created[96]"), ALLOWED | UNINSTALL_EXTRA)
+    check_command("set-hook", ("-gu", "after-new-window[98]"), ALLOWED | UNINSTALL_EXTRA)
+
+
+def test_show_default_selects_the_card_pane(server, tmux):
+    server.panes = [FakePane("%1", "work", options={OPTION_ROLE: "sidebar"}), FakePane("%2", "work")]
+    assert tmux.show("work", "0", "%1").ok
+    assert server.calls[-1][-1] == "%1"
+
+
+def test_show_focus_main_skips_a_sidebar_pane(server, tmux):
+    server.panes = [FakePane("%1", "work", options={OPTION_ROLE: "sidebar"}), FakePane("%2", "work")]
+    assert tmux.show("work", "0", "%1", focus_main=True).ok
+    assert server.commands() == ["switch-client", "select-window", "list-panes", "select-pane"]
+    assert server.calls[-1][-2:] == ["-t", "%2"]
+
+
+def test_show_focus_main_keeps_a_main_card_pane(server, tmux):
+    server.panes = [
+        FakePane("%1", "work", options={OPTION_ROLE: "sidebar"}),
+        FakePane("%2", "work"),
+        FakePane("%3", "work"),
+    ]
+    tmux.show("work", "0", "%3", focus_main=True)
+    assert server.calls[-1][-1] == "%3"
+
+
+def test_tmux_option_reads_a_global_option(server, tmux):
+    server.tmux_options["@sebside-focus"] = "main"
+    assert tmux.option("@sebside-focus") == "main"
+    assert tmux.option("@sebside-other") == ""

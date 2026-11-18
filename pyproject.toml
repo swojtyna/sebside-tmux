@@ -1,6 +1,6 @@
 [project]
 name = "sebside-tmux"
-version = "0.1.0"
+version = "0.2.0"
 description = "A tmux sidebar that shows every session as a card: who is working, who is waiting for you, what just finished."
 readme = "README.md"
 license = "MIT"

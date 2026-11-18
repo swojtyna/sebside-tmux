@@ -33,9 +33,17 @@ class FakeTmuxServer:
     fail: set[str] = field(default_factory=set)
     socket: str = SOCKET
     pid: int = SERVER_PID
+    tmux_options: dict[str, str] = field(default_factory=dict)
 
     def pane(self, pane_id: str) -> FakePane:
         return next(p for p in self.panes if p.pane_id == pane_id)
+
+    @staticmethod
+    def _in(pane: FakePane, target: str) -> bool:
+        if target.startswith("@"):
+            return target == f"@{pane.window}"
+        session, _, window = target.lstrip("=").partition(":")
+        return pane.session == session and (not window or window == pane.window)
 
     def record(self, pane: FakePane) -> str:
         values = {
@@ -61,8 +69,16 @@ class FakeTmuxServer:
         command, rest = rest[0], rest[1:]
         if command in self.fail:
             return Completed(1, "", f"{command} failed")
+        if command == "list-panes" and "-t" in rest:
+            target = rest[rest.index("-t") + 1]  # "@3" (window id) or "=session:window"
+            lines = [
+                f"{p.pane_id} {p.options.get(OPTION_ROLE, '')}".rstrip() for p in self.panes if self._in(p, target)
+            ]
+            return Completed(0, "\n".join(lines) + "\n", "") if lines else Completed(1, "", "can't find window")
         if command == "list-panes":
             return Completed(0, "\n".join(self.record(p) for p in self.panes) + "\n", "")
+        if command == "display-message" and rest[rest.index("-t") + 1].startswith("@"):
+            return Completed(0, "120\n", "")  # window_width
         if command == "display-message":
             pane = self.pane(rest[rest.index("-t") + 1])
             values = [str(self.pid), self.socket, pane.options.get(OPTION_ID, ""), pane.pane_id]
@@ -77,7 +93,12 @@ class FakeTmuxServer:
                 pane.options[positional[0]] = positional[1]
             return Completed(0, "", "")
         if command == "show-options":
-            return Completed(0, "C-a\n", "")
+            name = rest[-1]
+            return Completed(0, self.tmux_options.get(name, "C-a" if name == "prefix" else "") + "\n", "")
+        if command == "split-window":
+            new = FakePane(f"%{len(self.panes) + 50}", self.panes[0].session, window=self.panes[0].window)
+            self.panes.append(new)
+            return Completed(0, new.pane_id + "\n", "")
         return Completed(0, "", "")
 
     def commands(self) -> list[str]:

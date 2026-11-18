@@ -8,6 +8,7 @@ environment and every call passes `-S`.
 from __future__ import annotations
 
 import os
+import pty
 import shutil
 import subprocess
 import tempfile
@@ -229,3 +230,160 @@ def test_separators_in_a_real_directory_cannot_forge_panes(server: Server, tmp_p
     assert sorted(p.session for p in panes) == ["alpha", "beta", "evil"]
     assert all(p.pane_id != "%99" for p in panes)
     assert any(p.cwd.endswith("a?%99?b") for p in panes)
+
+
+# Auto-open, focus and `sebside open` ---------------------------------------------------------------------------
+
+
+def roles_of(server: Server, target: str) -> list[str]:
+    return server.tmux("list-panes", "-t", target, "-F", "#{pane_id} #{@sebside_role}").splitlines()
+
+
+def sidebar_count(server: Server, target: str) -> int:
+    return sum(1 for line in roles_of(server, target) if line.endswith(" sidebar"))
+
+
+def wait_for(check, seconds: float = 8.0) -> bool:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if check():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def source_plugin(server: Server) -> None:
+    subprocess.run(["bash", str(REPO / "sebside.tmux")], env=plugin_env(server), check=True, timeout=20)
+
+
+def test_open_if_missing_opens_once_and_is_quiet(server: Server, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    window = server.tmux("display-message", "-p", "-t", "=alpha:", "#{window_id}")
+    env = env_for(server, tmp_path)
+    assert cli.main(["open", "--if-missing", "--target", window], env) == 0
+    assert cli.main(["open", "--if-missing", "--target", window], env) == 0
+    assert sidebar_count(server, window) == 1
+    panes = server.tmux("list-panes", "-t", window, "-F", "#{pane_left} #{pane_active} #{@sebside_role} #{pane_width}")
+    left, main = sorted(panes.splitlines())  # "0 0 sidebar 36" sorts before the main pane
+    assert left.startswith("0 0 sidebar") and left.endswith(" 36")  # leftmost, not active
+    assert main.split()[1] == "1"  # focus stayed in the main pane
+    assert capsys.readouterr().out == ""
+
+
+def test_auto_on_installs_hooks_at_fixed_indexes_and_reload_is_idempotent(server: Server):
+    server.tmux("set-hook", "-g", "session-created[0]", "set-option -g @mine yes")
+    server.tmux("set-option", "-g", "@sebside-auto", "on")
+    source_plugin(server)
+    source_plugin(server)
+    hooks = server.tmux("show-hooks", "-g")
+    assert hooks.count("session-created[96]") == 1 and hooks.count("after-new-window[98]") == 1
+    assert "session-created[0]" in hooks and "session-closed[97]" in hooks
+    assert "open --if-missing --target #{window_id}" in hooks
+
+
+def test_auto_on_opens_the_sidebar_in_new_sessions_and_windows(server: Server):
+    server.tmux("set-option", "-g", "@sebside-auto", "on")
+    source_plugin(server)
+    server.tmux("new-session", "-d", "-s", "gamma", "-x", "100", "-y", "30", "sleep 600")
+    assert wait_for(lambda: sidebar_count(server, "=gamma:") == 1)
+    server.tmux("new-window", "-d", "-t", "=gamma:", "sleep 600")
+    assert wait_for(lambda: all(sidebar_count(server, f"=gamma:{i}") == 1 for i in (0, 1)))
+    time.sleep(0.5)
+    assert sidebar_count(server, "=gamma:0") == 1 and sidebar_count(server, "=gamma:1") == 1
+    assert sidebar_count(server, "=alpha:") == 0  # existing sessions are left alone
+
+
+def test_auto_off_removes_the_hooks_and_nothing_opens(server: Server):
+    server.tmux("set-option", "-g", "@sebside-auto", "on")
+    source_plugin(server)
+    server.tmux("set-option", "-g", "@sebside-auto", "off")
+    source_plugin(server)
+    hooks = server.tmux("show-hooks", "-g")
+    assert "session-created[96]" not in hooks and "after-new-window[98]" not in hooks
+    assert "session-closed[97]" in hooks
+    server.tmux("new-session", "-d", "-s", "delta", "-x", "100", "-y", "30", "sleep 600")
+    time.sleep(1.0)
+    assert sidebar_count(server, "=delta:") == 0
+
+
+def test_auto_default_is_off(server: Server):
+    source_plugin(server)
+    hooks = server.tmux("show-hooks", "-g")
+    assert "session-created[96]" not in hooks and "after-new-window[98]" not in hooks
+
+
+def test_focus_main_after_switch_lands_in_the_main_pane(server: Server, tmp_path: Path):
+    window = server.tmux("display-message", "-p", "-t", "=beta:", "#{window_id}")
+    assert cli.main(["open", "--target", window], env_for(server, tmp_path)) == 0
+    sidebar = next(line.split()[0] for line in roles_of(server, window) if line.endswith(" sidebar"))
+    main = next(line.split()[0] for line in roles_of(server, window) if not line.endswith(" sidebar"))
+    server.tmux("select-pane", "-t", sidebar)  # the cursor is in the sidebar of the target window
+    master, slave = pty.openpty()
+    client = subprocess.Popen(
+        ["tmux", "-S", str(server.socket), "attach", "-t", "=alpha"],
+        stdin=slave, stdout=slave, stderr=slave, env=server.env, start_new_session=True,
+    )  # fmt: skip
+    try:
+        assert wait_for(lambda: server.tmux("list-clients").strip() != "")
+        tmux = Tmux.create(server.socket)
+        assert tmux.show("beta", "0", sidebar, focus_main=True).ok
+        assert server.tmux("display-message", "-p", "-t", "=beta:", "#{pane_id}") == main
+        server.tmux("select-pane", "-t", sidebar)
+        assert tmux.show("beta", "0", sidebar).ok  # default behaviour is unchanged
+        assert server.tmux("display-message", "-p", "-t", "=beta:", "#{pane_id}") == sidebar
+    finally:
+        client.kill()
+        client.wait(timeout=10)
+        os.close(master)
+        os.close(slave)
+
+
+# Closing the sidebar when it is alone ------------------------------------------------------------------------
+
+
+def start_session_with_sidebar(server: Server, tmp_path: Path, name: str, *, mains: int = 1) -> str:
+    """A session whose main panes wait for Enter (`read`), plus a real running sidebar. Returns the window id."""
+    server.tmux("new-session", "-d", "-s", name, "-x", "100", "-y", "30", "read x")
+    for _ in range(mains - 1):
+        server.tmux("split-window", "-d", "-t", f"={name}:", "read x")
+    window = server.tmux("display-message", "-p", "-t", f"={name}:", "#{window_id}")
+    env = env_for(server, tmp_path)
+    bin_dir = str(Path(shutil.which("sebside") or REPO / ".venv" / "bin" / "sebside").parent)
+    env |= {"PATH": f"{bin_dir}:{env['PATH']}", "SEBSIDE_BIN": f"{bin_dir}/sebside"}
+    assert cli.main(["open", "--target", window], env) == 0
+    assert wait_for(lambda: sidebar_count(server, window) == 1)
+    time.sleep(2.5)  # a refresh (1.5 s) has seen the main pane
+    return window
+
+
+def sessions(server: Server) -> list[str]:
+    return server.tmux("list-sessions", "-F", "#{session_name}").split()
+
+
+def main_panes(server: Server, window: str) -> list[str]:
+    return [line.split()[0] for line in roles_of(server, window) if not line.endswith(" sidebar")]
+
+
+def test_sidebar_and_session_end_when_the_main_pane_exits(server: Server, tmp_path: Path):
+    window = start_session_with_sidebar(server, tmp_path, "gamma")
+    server.tmux("send-keys", "-t", main_panes(server, window)[0], "Enter")
+    assert wait_for(lambda: "gamma" not in sessions(server))
+    assert sessions(server) == ["alpha", "beta"]
+
+
+def test_sidebar_stays_while_another_main_pane_lives(server: Server, tmp_path: Path):
+    window = start_session_with_sidebar(server, tmp_path, "gamma", mains=2)
+    first, second = main_panes(server, window)
+    server.tmux("send-keys", "-t", first, "Enter")
+    assert wait_for(lambda: main_panes(server, window) == [second])
+    time.sleep(3.5)
+    assert sidebar_count(server, window) == 1 and "gamma" in sessions(server)
+    assert main_panes(server, window) == [second]
+
+
+def test_close_alone_off_keeps_the_sidebar_and_the_session(server: Server, tmp_path: Path):
+    server.tmux("set-option", "-g", "@sebside-close-alone", "off")
+    window = start_session_with_sidebar(server, tmp_path, "gamma")
+    server.tmux("send-keys", "-t", main_panes(server, window)[0], "Enter")
+    assert wait_for(lambda: main_panes(server, window) == [])
+    time.sleep(3.5)
+    assert sidebar_count(server, window) == 1 and "gamma" in sessions(server)

@@ -5,6 +5,8 @@
 #   @sebside-key    key after the prefix that toggles the sidebar     (default: S, bound only if S is free)
 #   @sebside-width  sidebar width in columns or percent, e.g. 36, 25% (default: `sebside config get width`)
 #   @sebside-hook   "off" to skip the session-closed nudge hook       (default: on)
+#   @sebside-auto   "on" opens the sidebar in every new session and window (default: off)
+#   @sebside-focus  "main": Enter on a card leaves the cursor in the main pane, not the sidebar (read by sebside)
 set -u
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,6 +72,18 @@ main() {
         local reconcile
         reconcile="$(format_escape "$(shell_quote "$sebside")") --socket #{q:socket_path} reconcile"
         tmux set-hook -g 'session-closed[97]' "run-shell -b $(tmux_quote "$reconcile")"
+    fi
+
+    # Auto-open: fixed indexes, so re-sourcing is idempotent and the user's own hooks are never touched.
+    # tmux expands `#{window_id}` in run-shell; in session-created it is the new session's first window.
+    if [ "$(option @sebside-auto off)" = "on" ]; then
+        local open
+        open="$(format_escape "$(shell_quote "$sebside")") --socket #{q:socket_path} open --if-missing --target #{window_id}"
+        tmux set-hook -g 'session-created[96]' "run-shell -b $(tmux_quote "$open")"
+        tmux set-hook -g 'after-new-window[98]' "run-shell -b $(tmux_quote "$open")"
+    else
+        tmux set-hook -gu 'session-created[96]' 2>/dev/null || true
+        tmux set-hook -gu 'after-new-window[98]' 2>/dev/null || true
     fi
 }
 

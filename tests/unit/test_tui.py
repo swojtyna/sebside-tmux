@@ -85,6 +85,18 @@ def test_enter_switches_to_live_card_and_never_types(server, app):
     assert app.message == "showing api"
 
 
+def test_enter_with_focus_main_lands_in_the_main_pane(server, app):
+    from sebside.model import OPTION_ROLE
+
+    server.tmux_options["@sebside-focus"] = "main"
+    server.panes += [FakePane("%1", "api", options={OPTION_ROLE: "sidebar"}), FakePane("%2", "api")]
+    app.refresh()
+    app.selected_key = next(card.key for card in app.board.cards if card.session == "api")
+    app.handle_key("enter")
+    assert server.calls[-1][-2:] == ["-t", "%2"]
+    assert server.commands()[-1] == "select-pane"
+
+
 def test_explain_toggles(server, app):
     server.panes.append(FakePane("%1", "api"))
     app.refresh()
@@ -164,3 +176,74 @@ def test_tmux_not_answering_keeps_last_board(app, store, tmp_path: Path):
     broken = App(Config(), Tmux(None, lambda a, t: Completed(124, "", "timeout")), store, clock=lambda: NOW)
     broken.refresh()
     assert "did not answer" in broken.message
+
+
+# closing when alone -----------------------------------------------------------------------------------
+def alone_app(app: App, server, *panes: FakePane) -> App:
+    server.panes += panes
+    app.own_pane = "%1"
+    app.refresh()
+    return app
+
+
+def sidebar_and_main(window: str = "0") -> tuple[FakePane, FakePane]:
+    return (
+        FakePane("%1", "api", window=window, options={"@sebside_role": "sidebar"}),
+        FakePane("%2", "api", window=window),
+    )
+
+
+def test_sidebar_closes_when_the_main_pane_is_gone(server, app):
+    sidebar, main = sidebar_and_main()
+    alone_app(app, server, sidebar, main)
+    assert app.alone() is False and app.companion_seen
+    server.panes.remove(main)
+    app.refresh()
+    assert app.alone() is True
+    assert not any(call[3 if call[1] == "-S" else 1] in ("kill-pane", "kill-window") for call in server.calls)
+
+
+def test_sidebar_stays_while_any_main_pane_remains(server, app):
+    sidebar, main = sidebar_and_main()
+    second = FakePane("%3", "api")
+    alone_app(app, server, sidebar, main, second)
+    app.alone()
+    server.panes.remove(main)
+    app.refresh()
+    assert app.alone() is False
+
+
+def test_sidebar_ignores_main_panes_of_other_windows(server, app):
+    sidebar, main = sidebar_and_main()
+    elsewhere = FakePane("%9", "api", window="1")
+    alone_app(app, server, sidebar, main, elsewhere)
+    app.alone()
+    server.panes.remove(main)
+    app.refresh()
+    assert app.alone() is True
+
+
+def test_sidebar_that_never_had_a_companion_stays(server, app):
+    sidebar, _ = sidebar_and_main()
+    alone_app(app, server, sidebar)
+    assert app.alone() is False
+
+
+def test_close_alone_off_keeps_the_sidebar(server, app):
+    sidebar, main = sidebar_and_main()
+    alone_app(app, server, sidebar, main)
+    app.alone()
+    server.panes.remove(main)
+    server.tmux_options["@sebside-close-alone"] = "off"
+    app.refresh()
+    assert app.alone() is False
+
+
+def test_unknown_own_pane_never_closes(server, app):
+    sidebar, main = sidebar_and_main()
+    alone_app(app, server, sidebar, main)
+    app.alone()
+    app.own_pane = ""
+    server.panes.remove(main)
+    app.refresh()
+    assert app.alone() is False
