@@ -187,3 +187,11 @@ def test_done_description_is_green_even_when_closed():
         assert style.fg == "green" and style.bold and not style.dim
     working = card_rows(card(State.WORKING, desc="pracuje"), 36, False, Config(), NOW)[2]
     assert next(style for text, style in working if text == "p").dim
+
+
+def test_seen_done_description_stays_green_without_bold():
+    third = card_rows(card(State.QUIET, desc="gotowe", seen=True), 36, False, Config(), NOW)[2]
+    style = next(style for text, style in third if text == "g")
+    assert style.fg == "green" and not style.bold and not style.dim
+    idle = card_rows(card(State.QUIET, desc="czeka"), 36, False, Config(), NOW)[2]
+    assert next(style for text, style in idle if text == "c").dim

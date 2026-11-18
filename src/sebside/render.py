@@ -190,8 +190,14 @@ def card_rows(
         _second_right(extra, here, Style(text, bold=not quiet, dim=quiet), Style(color, bold=True)),
         bg,
     )
-    # A finished card says so in the "done" color (the theme's green), not in dim text, even once it is closed.
-    desc_style = Style(config.colors[State.DONE], bold=True) if card.state is State.DONE else Style(text, dim=True)
+    # A finished card says so in the "done" color (the theme's green), not in dim text, even once it is closed or
+    # seen; bold only while nobody has looked at it yet.
+    if card.state is State.DONE:
+        desc_style = Style(config.colors[State.DONE], bold=True)
+    elif card.seen:
+        desc_style = Style(config.colors[State.DONE])
+    else:
+        desc_style = Style(text, dim=True)
     third = line(width, [bar, ("   ", Style()), (desc, desc_style)], None, bg)
     rule = line(width, [(RULE * max(width - 2, 0), Style(config.colors["muted"], dim=True))])
     return [first, second, third, rule]

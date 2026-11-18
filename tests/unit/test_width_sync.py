@@ -80,3 +80,16 @@ def test_reexec_retries_while_the_tool_environment_is_rebuilt():
     with pytest.raises(OSError):
         reexec(gone, lambda seconds: None)
     assert REEXEC_TRIES >= 10
+
+
+def test_a_window_resize_is_not_a_drag_and_the_sidebar_returns_to_the_shared_width():
+    server = Server("73")
+    side = WidthSync()
+    side.tick(server, "%4", 73, 269)
+    assert server.calls == []
+    side.tick(server, "%4", 53, 200)                 # Terminal narrowed: tmux rescaled our pane
+    assert server.options[OPTION_SHARED_WIDTH] == "73"
+    assert server.calls[-1] == ("resize-pane", "-t", "%4", "-x", "73")
+    side.tick(server, "%4", 73, 200)                 # our own resize
+    side.tick(server, "%4", 60, 200)                 # a real drag, same window width
+    assert server.options[OPTION_SHARED_WIDTH] == "60"

@@ -439,18 +439,29 @@ class WidthSync:
     last: int | None = None
     requested: int | None = None
     tried_for: int | None = None
+    window: int | None = None
 
-    def tick(self, tmux: TmuxLike, pane: str, columns: int) -> None:
+    def tick(self, tmux: TmuxLike, pane: str, columns: int, window: int | None = None) -> None:
         if not pane:
             return
         raw = tmux.option(OPTION_SHARED_WIDTH)
         shared = int(raw) if raw.isdigit() else None
+        # tmux rescales panes when the window itself changes size (new client, Terminal resized): not a drag.
+        window_changed = window is not None and self.window is not None and window != self.window
+        if window is not None:
+            self.window = window
         if columns == self.last and self.requested is not None:
             self.requested = None   # the resize changed nothing (already at tmux's limit): the next change is the user's
         if self.last is None or columns != self.last:
             first, ours = self.last is None, self.requested is not None
             self.last, self.requested = columns, None
             if ours:
+                return
+            if window_changed and not first:
+                self.tried_for = None   # follow the shared width again instead of publishing tmux's rescale
+                if shared is not None and shared != columns:
+                    self.requested = self.tried_for = shared
+                    tmux.run("resize-pane", "-t", pane, "-x", str(shared))
                 return
             if not first or shared is None:
                 if shared != columns:
@@ -460,6 +471,15 @@ class WidthSync:
         if shared is not None and shared != columns and self.tried_for != shared:
             self.requested = self.tried_for = shared
             tmux.run("resize-pane", "-t", pane, "-x", str(shared))
+
+
+def _window_width(tmux: TmuxLike, pane: str) -> int | None:
+    """Width of the window holding our pane; None when tmux does not answer."""
+    if not pane:
+        return None
+    done = tmux.display(pane, "#{window_width}")
+    text = done.stdout.strip() if done.ok else ""
+    return int(text) if text.isdigit() else None
 
 
 class _Resized:
@@ -515,7 +535,7 @@ def _run(app: App, own_pane: str | None) -> int:
                 last_poll, last_stamp = time.monotonic(), app.store.dir_stamp()
                 if app.alone():
                     return 0
-                widths.tick(app.tmux, app.own_pane, terminal_size(fd, app.config.width)[0])
+                widths.tick(app.tmux, app.own_pane, terminal_size(fd, app.config.width)[0], _window_width(app.tmux, app.own_pane))
             if watch.changed(time.monotonic()):
                 app.reload = True
                 return 0
