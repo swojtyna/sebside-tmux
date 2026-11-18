@@ -73,7 +73,7 @@ sidebar knows which pane the card belongs to and your status line can show the s
 | `--title` | `title` | line 1, bold | session name |
 | `--subtitle` | `subtitle` | line 2, dimmed | pane directory |
 | `--desc` | `desc` | line 3, dimmed, cut with … (max 300 characters) | current command |
-| `--extra` | `extra` | right side of line 2 | nothing |
+| `--extra` | `extra` | right side of line 2 (line 1 when `show_age = false`) | nothing |
 | `--resume` | `resume` (argv list) | Enter on a closed card | not resumable |
 | `--cwd` | `cwd` | directory for resume | current directory |
 | (automatic) | `tmux`: socket, server pid, pane | which pane is live | `null` outside tmux |
@@ -118,6 +118,7 @@ history = 5            # closed cards shown at the bottom
 stale_hours = 12       # no update and no output this long -> unknown
 quiet_minutes = 10     # a session without a card is quiet after this long without output
 refresh_seconds = 1.5  # tmux poll interval; card file changes show up at once
+show_age = true        # false hides the time on the right of line 1; the card's extra text takes its place
 sort = "attention"     # attention | recent | name
 resume_programs = []   # programs a closed card may be resumed with, e.g. ["vim", "my-agent"]
 

@@ -80,6 +80,7 @@ class Config:
     icons: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_ICONS))
     colors: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_COLORS))
     filter: Filter = field(default_factory=Filter)
+    show_age: bool = True  # the time on the right of each card; false hides it
     resume_programs: tuple[str, ...] = ()  # programs a closed card may be resumed with; empty = resume off
 
     def may_resume(self, argv: tuple[str, ...]) -> bool:
@@ -135,7 +136,7 @@ def _patterns(data: Mapping[str, Any], key: str, default: tuple[str, ...]) -> tu
 
 
 def parse(data: Mapping[str, Any]) -> Config:
-    known = {*SCALARS, "icons", "colors", "filter", "resume_programs"}
+    known = {*SCALARS, "icons", "colors", "filter", "resume_programs", "show_age"}
     unknown = set(data) - known
     if unknown:
         raise ConfigError(f"unknown keys: {', '.join(sorted(unknown))}")
@@ -149,6 +150,9 @@ def parse(data: Mapping[str, Any]) -> Config:
             raise ConfigError(
                 f"[colors] {name} = {value!r}: use an ANSI name (red, bright-cyan, grey, default) or #rrggbb"
             )
+    show_age = data.get("show_age", True)
+    if not isinstance(show_age, bool):
+        raise ConfigError(f"show_age must be true or false, got {show_age!r}")
     raw_filter = data.get("filter", {})
     if not isinstance(raw_filter, dict):
         raise ConfigError("[filter] must be a table")
@@ -163,6 +167,7 @@ def parse(data: Mapping[str, Any]) -> Config:
         colors=dict(DEFAULT_COLORS) | color_overrides,
         filter=Filter(_patterns(raw_filter, "include", ("*",)), _patterns(raw_filter, "exclude", ())),
         resume_programs=_programs(data.get("resume_programs", [])),
+        show_age=show_age,
     )
 
 

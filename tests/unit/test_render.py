@@ -66,6 +66,22 @@ def test_quiet_card_is_dimmed_and_closed_card_grey():
     assert closed[1][1].fg == "grey" and to_plain(closed)[3] == "↺"
 
 
+def test_show_age_false_hides_the_time():
+    rows = card_rows(card(), 36, False, Config(show_age=False), NOW)
+    assert to_plain(rows[0]) == " ▌ ● deploy                         "
+
+
+def test_without_age_extra_moves_to_the_first_line():
+    rows = card_rows(card(extra="ctx 70%"), 36, False, Config(show_age=False), NOW)
+    assert to_plain(rows[0]) == " ▌ ● deploy                 ctx 70% "
+    assert to_plain(rows[1]) == " ▌   ~/code/api                     "
+
+
+def test_selected_quiet_card_is_not_dimmed():
+    title_style = card_rows(card(State.QUIET), 36, True, Config(), NOW)[0][5][1]
+    assert not title_style.dim and title_style.bold
+
+
 def test_spinner_animates_by_frame():
     icons = {to_plain(card_rows(card(State.WORKING), 36, False, Config(), NOW, frame)[0])[3] for frame in range(10)}
     assert len(icons) == 10

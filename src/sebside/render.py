@@ -134,13 +134,17 @@ def card_rows(card: Card, width: int, selected: bool, config: Config, now: float
     """Three lines and a thin rule:  ▌ ● title   time /  ▌   subtitle   extra /  ▌   description…"""
     bg = config.colors["selected-bg"] if selected else None
     color = color_of(card, config)
-    quiet = card.state in DIMMED or not card.live
+    quiet = (card.state in DIMMED or not card.live) and not selected  # the selected card is never dimmed
     text = config.colors["text"]
     bar: Span = (BAR, Style(color, bold=True))
-    when = age(now - card.since) if card.since else ""
     body = width - 6
+    if config.show_age:
+        when = age(now - card.since) if card.since else ""
+        extra = clip(card.extra, max(body // 3, 0)) if card.extra else ""
+    else:  # no age: the extra text (e.g. context left) takes its place on the first line
+        when = clip(card.extra, max(body // 3, 0)) if card.extra else ""
+        extra = ""
     title = clip(card.title, body - text_width(when) - 1)
-    extra = clip(card.extra, max(body // 3, 0)) if card.extra else ""
     subtitle = clip(card.subtitle, body - (text_width(extra) + 1 if extra else 0))
     desc = clip(card.desc, body)
     first = line(

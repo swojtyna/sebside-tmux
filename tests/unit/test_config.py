@@ -95,3 +95,12 @@ def test_syntax_error_names_the_file(tmp_path):
     path.write_text("width = = 3")
     with pytest.raises(ConfigError, match=r"config\.toml"):
         load(path)
+
+
+def test_show_age_must_be_bool():
+    from sebside.config import ConfigError, parse
+
+    assert parse({"show_age": False}).show_age is False
+    assert parse({}).show_age is True
+    with pytest.raises(ConfigError, match="show_age"):
+        parse({"show_age": "no"})
