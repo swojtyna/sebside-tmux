@@ -1,0 +1,361 @@
+"""Command line: `sebside` (the sidebar), `sebside card ...`, `sebside reconcile`, `sebside config ...`,
+`sebside uninstall`. Every command is `run_<name>(ctx, args) -> int`; errors map to exit codes (see errors.py)."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import sys
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from typing import Any
+
+from . import __version__
+from .cards import build, reconcile, server_of
+from .config import SORTS, Config, config_path, load_from_env
+from .errors import EXIT_OK, SebsideError, StateError, TmuxError, UsageError
+from .log import logger, setup
+from .model import OPTION_ID, OPTION_ROLE, OPTION_STATE, SIDEBAR_ROLE, CardRecord, State, TmuxRef, parse_state
+from .render import clean
+from .store import Store
+from .tmux import FIELD_SEP, OWN_HOOKS, PANE_ID, Tmux, format_field, server_from_env
+from .tui import App, run
+
+MAX_DESC = 300
+MAX_TEXT = 200
+DEFAULT_KEY = "S"
+
+
+@dataclass(frozen=True)
+class Context:
+    env: Mapping[str, str]
+    store: Store
+    now: float
+
+
+Command = Callable[[Context, argparse.Namespace], int]
+
+
+# parser ------------------------------------------------------------------------------------------
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="sebside", description="A tmux sidebar of cards, one per session or task.")
+    parser.add_argument("--version", action="version", version=f"sebside {__version__}")
+    parser.add_argument("--socket", help="tmux socket path (default: $SEBSIDE_TMUX_SOCKET, else the one in $TMUX)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="write a debug log to the state directory")
+    # The same two options are accepted after a subcommand too (`sebside reconcile --socket S`); SUPPRESS keeps a
+    # subcommand from overwriting a value given before it.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--socket", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    common.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    commands = parser.add_subparsers(dest="command")
+
+    sidebar = commands.add_parser("sidebar", parents=[common], help="open the sidebar (the default command)")
+    sidebar.add_argument("--sort", choices=SORTS)
+    sidebar.add_argument("--history", type=int, help="how many closed cards to show")
+
+    card = commands.add_parser("card", help="set, clear or list cards").add_subparsers(dest="card", required=True)
+    states = ", ".join(state.value for state in State)
+    set_ = card.add_parser("set", parents=[common], help="create or update a card (in tmux: on $TMUX_PANE)")
+    set_.add_argument("--id", required=True, help="stable card id chosen by you, e.g. a task or agent session id")
+    set_.add_argument("--state", required=True, help=f"one of: {states}")
+    set_.add_argument("--title", help="first line (default: session name)")
+    set_.add_argument("--subtitle", help="second line (default: pane directory)")
+    set_.add_argument("--desc", help="third line (default: current command)")
+    set_.add_argument("--extra", help="short text on the right of the second line")
+    set_.add_argument("--resume", help="command that brings the card back, split into words, run without a shell")
+    set_.add_argument("--cwd", help="directory for resume (default: current directory)")
+    set_.add_argument("--pane", help="target pane id (default: $TMUX_PANE)")
+
+    clear = card.add_parser("clear", parents=[common], help="close a card (it stays in history unless --forget)")
+    clear.add_argument("--id", help="card id (default: the card on $TMUX_PANE)")
+    clear.add_argument("--pane", help="target pane id (default: $TMUX_PANE)")
+    clear.add_argument("--forget", action="store_true", help="delete the card file too")
+
+    card.add_parser("list", parents=[common], help="print live and recently closed cards as JSON")
+
+    commands.add_parser(
+        "reconcile", parents=[common], help="close cards whose pane is gone (the session-closed hook calls this)"
+    )
+
+    config = commands.add_parser("config", help="show the config").add_subparsers(dest="config", required=True)
+    config.add_parser("path", parents=[common], help="print the config file path")
+    config.add_parser("show", parents=[common], help="print the effective config as JSON")
+    get = config.add_parser("get", parents=[common], help="print one value, e.g. width")
+    get.add_argument("key")
+
+    commands.add_parser(
+        "uninstall", parents=[common], help="remove sebside's tmux hook, key binding, sidebar panes and pane options"
+    )
+    return parser
+
+
+# helpers -----------------------------------------------------------------------------------------
+def _socket(args: argparse.Namespace, env: Mapping[str, str]) -> Path | None:
+    explicit = args.socket or env.get("SEBSIDE_TMUX_SOCKET")
+    if explicit:
+        return Path(explicit).expanduser()
+    server = server_from_env(env)
+    return Path(server.socket) if server else None
+
+
+def _tmux(args: argparse.Namespace, env: Mapping[str, str], *, uninstall: bool = False) -> Tmux:
+    if not Tmux.available():
+        raise TmuxError("tmux not found: install tmux 3.0 or newer")
+    return Tmux.create(_socket(args, env), uninstall=uninstall)
+
+
+def _one_line(value: str, limit: int) -> str:
+    return " ".join("".join(ch if ch.isprintable() else " " for ch in value).split())[:limit]
+
+
+def _config(args: argparse.Namespace, env: Mapping[str, str]) -> Config:
+    flags: dict[str, Any] = {}
+    for key in ("sort", "history"):
+        value = getattr(args, key, None)
+        if value is not None:
+            flags[key] = value
+    return load_from_env(env, flags)
+
+
+# card set ----------------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Target:
+    tmux: Tmux
+    ref: TmuxRef
+    previous_id: str
+
+
+def _target(args: argparse.Namespace, env: Mapping[str, str]) -> Target | None:
+    """The pane to attach the card to, or None outside tmux (then tmux is never called)."""
+    pane = args.pane or (env.get("TMUX_PANE", "") if env.get("TMUX") else "")
+    if not pane:
+        return None
+    socket = _socket(args, env)
+    if socket is None:
+        raise UsageError("--pane needs a tmux server: pass --socket or run inside tmux")
+    tmux = _tmux(args, env)
+    fmt = FIELD_SEP.join([format_field("pid"), format_field("socket_path"), format_field(OPTION_ID), "#{pane_id}"])
+    done = tmux.display(pane, fmt)
+    if not done.ok:
+        raise TmuxError(f"cannot read pane {pane}: {done.error}")
+    values = done.stdout.rstrip("\n").split(FIELD_SEP)
+    if len(values) != 4 or not values[0].isdigit() or not PANE_ID.match(values[3]):
+        raise TmuxError(f"unexpected tmux answer for pane {pane}: is it tmux 3.0 or newer?")
+    return Target(tmux, TmuxRef(values[1], int(values[0]), values[3]), values[2])
+
+
+def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
+    card_id = args.id.strip()
+    if not card_id or _one_line(card_id, MAX_TEXT) != card_id:
+        raise UsageError(f"--id must be a non-empty single line of at most {MAX_TEXT} characters")
+    try:
+        state = parse_state(args.state)
+    except ValueError as error:
+        raise UsageError(str(error)) from None
+    try:
+        resume = tuple(shlex.split(args.resume)) if args.resume is not None else None
+    except ValueError as error:
+        raise UsageError(f"--resume: {error}") from None
+    if resume is not None and not all(_utf8(word) and word.isprintable() for word in resume):
+        raise UsageError("--resume must be printable UTF-8 text")
+    fields = (("title", args.title), ("subtitle", args.subtitle), ("desc", args.desc), ("extra", args.extra))
+    text = {
+        name: _one_line(value, MAX_DESC if name == "desc" else MAX_TEXT) for name, value in fields if value is not None
+    }
+    target = _target(args, ctx.env)
+    if target is not None:
+        if target.previous_id and target.previous_id != card_id:
+            _close_if_on(ctx, target)
+        _set_option(target, OPTION_ID, card_id)
+        _set_option(target, OPTION_STATE, state.value)
+    cwd = _escape_surrogates(args.cwd or ctx.env.get("PWD") or os.fspath(Path.cwd()))
+
+    def change(current: CardRecord | None) -> CardRecord:
+        record = current or CardRecord(card_id, created_at=ctx.now)
+        if record.readonly:
+            raise StateError(f"card {card_id!r} was written by a newer sebside: upgrade sebside")
+        updates: dict[str, Any] = dict(text)
+        if resume is not None:
+            updates["resume"] = resume
+        return replace(
+            record,
+            **updates,
+            state=state,
+            cwd=cwd,
+            tmux=target.ref if target else None,
+            rev=record.rev + 1,
+            updated_at=ctx.now,
+            closed_at=None,
+        )
+
+    record = ctx.store.update(card_id, change)
+    if record is None:
+        raise StateError(f"card {card_id!r} was not written: check {ctx.store.cards_dir}")
+    where = f"pane {record.tmux.pane}" if record.tmux else "outside tmux"
+    print(f"card {clean(record.id)}: {record.state.value} (rev {record.rev}, {where})")
+    return EXIT_OK
+
+
+def _utf8(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _escape_surrogates(text: str) -> str:
+    """A path from a non-UTF-8 environment, made writable as JSON (undecodable bytes become U+FFFD)."""
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
+def _close_if_on(ctx: Context, target: Target) -> bool:
+    """Close the card the pane option names, but only if its file says it lives on this very pane. A stale or
+    copied option must never close a card that is live elsewhere."""
+    previous = ctx.store.load(target.previous_id)
+    if previous is None or previous.tmux != target.ref:
+        return False
+    return bool(ctx.store.close([target.previous_id], ctx.now, {previous.id: previous.rev}))
+
+
+def _set_option(target: Target, name: str, value: str) -> None:
+    done = target.tmux.set_pane_option(target.ref.pane, name, value)
+    if not done.ok:
+        raise TmuxError(f"tmux refused to set {name} on {target.ref.pane}: {done.error}")
+
+
+# other commands ----------------------------------------------------------------------------------
+def run_card_clear(ctx: Context, args: argparse.Namespace) -> int:
+    card_id = args.id
+    target = _target(args, ctx.env) if not card_id or args.pane else None
+    if target is not None:
+        for name in (OPTION_ID, OPTION_STATE):
+            target.tmux.unset_pane_option(target.ref.pane, name)
+        if not card_id:
+            if not target.previous_id:
+                raise UsageError("no card on this pane: pass --id")
+            # Without --id only the card that really lives on this pane is closed.
+            record = ctx.store.load(target.previous_id)
+            if record is None or record.tmux != target.ref:
+                print(f"removed the pane option; {clean(target.previous_id)} lives elsewhere and stays open")
+                return EXIT_OK
+            card_id = target.previous_id
+    if not card_id:
+        raise UsageError("no card to clear: pass --id, or run inside a pane that has a card")
+    done = ctx.store.delete(card_id) if args.forget else bool(ctx.store.close([card_id], ctx.now))
+    verb = "forgot" if args.forget else "closed"
+    print(f"{verb} {clean(card_id)}" if done else f"{clean(card_id)}: nothing to do")
+    return EXIT_OK
+
+
+def run_card_list(ctx: Context, args: argparse.Namespace) -> int:
+    config = _config(args, ctx.env)
+    panes = _tmux(args, ctx.env).list_panes() if _socket(args, ctx.env) else []
+    board = build(panes or [], ctx.store.load_all(), config, ctx.now, ctx.env.get("HOME", ""))
+    payload = {"live": [asdict(card) for card in board.live], "history": [asdict(card) for card in board.history]}
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return EXIT_OK
+
+
+def run_reconcile(ctx: Context, args: argparse.Namespace) -> int:
+    panes = _tmux(args, ctx.env).list_panes()
+    if panes is None:
+        raise TmuxError("tmux did not answer: try again")
+    records = ctx.store.load_all()
+    gone = reconcile(records, panes, server_of(panes), lambda path: Path(path).exists(), ctx.now)
+    closed = ctx.store.close(gone, ctx.now, {card_id: records[card_id].rev for card_id in gone})
+    ctx.store.prune(ctx.now)
+    if closed:
+        print("closed: " + ", ".join(clean(card_id) for card_id in closed))
+    return EXIT_OK
+
+
+def run_config(ctx: Context, args: argparse.Namespace) -> int:
+    if args.config == "path":
+        print(config_path(ctx.env))
+        return EXIT_OK
+    config = _config(args, ctx.env)
+    data: dict[str, Any] = asdict(config)
+    data["icons"], data["colors"] = dict(config.icons), dict(config.colors)
+    if args.config == "show":
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return EXIT_OK
+    if args.key not in data:
+        raise UsageError(f"unknown key {args.key!r}: known keys are {', '.join(data)}")
+    value = data[args.key]
+    print(json.dumps(value, ensure_ascii=False) if isinstance(value, dict | list | tuple) else value)
+    return EXIT_OK
+
+
+def run_uninstall(ctx: Context, args: argparse.Namespace) -> int:
+    tmux = _tmux(args, ctx.env, uninstall=True)
+    panes = tmux.list_panes()
+    if panes is None:
+        raise TmuxError("tmux did not answer: try again")
+    for hook in sorted(OWN_HOOKS):
+        tmux.run("set-hook", "-gu", hook)
+    key = tmux.run("show-options", "-gqv", "@sebside-key").stdout.strip() or DEFAULT_KEY
+    binding = tmux.run("list-keys", "-T", "prefix", key)
+    if binding.ok and "sebside" in binding.stdout:
+        tmux.run("unbind-key", "-T", "prefix", key)
+    killed = 0
+    for pane in panes:
+        if pane.role == SIDEBAR_ROLE:
+            killed += tmux.run("kill-pane", "-t", pane.pane_id).ok
+            continue
+        for name in (OPTION_ID, OPTION_STATE, OPTION_ROLE):
+            tmux.unset_pane_option(pane.pane_id, name)
+    print(f"removed hooks, key binding and {killed} sidebar pane(s); card files stay in {ctx.store.cards_dir}")
+    print("also remove the plugin line from your tmux.conf, or the next start installs it again")
+    return EXIT_OK
+
+
+def run_sidebar(ctx: Context, args: argparse.Namespace) -> int:
+    socket = _socket(args, ctx.env)
+    if socket is None:
+        raise TmuxError("not inside tmux: open the sidebar from a tmux pane (prefix + S) or pass --socket")
+    app = App(_config(args, ctx.env), _tmux(args, ctx.env), ctx.store, home=ctx.env.get("HOME", ""))
+    return run(app, ctx.env.get("TMUX_PANE") if ctx.env.get("TMUX") else None)
+
+
+COMMANDS: dict[str, Command] = {
+    "sidebar": run_sidebar,
+    "card set": run_card_set,
+    "card clear": run_card_clear,
+    "card list": run_card_list,
+    "reconcile": run_reconcile,
+    "config": run_config,
+    "uninstall": run_uninstall,
+}
+
+
+# main --------------------------------------------------------------------------------------------
+def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None) -> int:
+    environment = dict(os.environ) if env is None else dict(env)
+    args = _parser().parse_args(argv)
+    store = Store.from_env(environment)
+    debug = bool(args.verbose) or environment.get("SEBSIDE_DEBUG") == "1"
+    ctx = Context(environment, store, time.time())
+    name = args.command or "sidebar"
+    if name == "card":
+        name = f"card {args.card}"
+    try:
+        setup(debug, store.root)
+        return COMMANDS[name](ctx, args)
+    except SebsideError as error:
+        logger().exception("failed")
+        print(f"sebside: {error}", file=sys.stderr)
+        return error.exit_code
+    except OSError as error:
+        if debug:
+            raise
+        print(f"sebside: {error.strerror or error}: run with -v for a debug log", file=sys.stderr)
+        return StateError.exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

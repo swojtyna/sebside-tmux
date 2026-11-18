@@ -1,0 +1,73 @@
+[project]
+name = "sebside-tmux"
+version = "0.1.0"
+description = "A tmux sidebar that shows every session as a card: who is working, who is waiting for you, what just finished."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Sebastian Wojtyna" }]
+requires-python = ">=3.12"
+dependencies = []
+keywords = ["tmux", "sidebar", "tui", "terminal", "sessions", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Terminals",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/swojtyna/sebside-tmux"
+Repository = "https://github.com/swojtyna/sebside-tmux"
+Issues = "https://github.com/swojtyna/sebside-tmux/issues"
+Changelog = "https://github.com/swojtyna/sebside-tmux/blob/main/CHANGELOG.md"
+
+[project.scripts]
+sebside = "sebside.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sebside"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/sebside", "tests", "scripts", "sebside.tmux", "README.md", "LICENSE", "CHANGELOG.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+markers = ["tmux: needs a real tmux binary; runs on a private tmux server, never the default one"]
+pythonpath = ["tests"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src/sebside"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PT", "C4", "PTH", "TC", "T20", "S", "ANN"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # box-drawing and icon characters are intentional
+
+[tool.ruff.lint.per-file-ignores]
+"src/sebside/tmux.py" = ["S603", "S607"]  # the only module that runs a subprocess
+"src/sebside/cli.py" = ["T20"]  # print is allowed only in cli, render and tui
+"src/sebside/render.py" = ["T20"]
+"src/sebside/tui.py" = ["T20"]
+"tests/**" = ["S101", "S108", "S603", "S607", "ANN", "T20", "PTH", "PT018", "TC"]
+"scripts/**" = ["T20", "S603", "S607"]
