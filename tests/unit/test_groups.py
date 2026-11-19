@@ -334,9 +334,26 @@ def test_group_files_that_are_not_ours_or_not_valid_are_ignored(store, tmp_path)
     outside.write_text(json.dumps({"title": "evil"}))
     store.group_path("link").symlink_to(outside)
     store.group_path("broken").write_text("{nope")
-    store.group_path("empty").write_text(json.dumps({"title": "  "}))
-    store.group_path("typed").write_text(json.dumps({"title": "T", "note": 5}))
+    store.group_path("empty").write_text(json.dumps({"id": "empty", "title": "  "}))
+    store.group_path("typed").write_text(json.dumps({"id": "typed", "title": "T", "note": 5}))
     assert [store.load_group(name) for name in ("link", "broken", "empty", "typed", "missing", "../x")] == [None] * 6
+
+
+def test_group_ids_that_differ_only_in_case_never_share_a_file(store):
+    store.write_group(Group("web", "lower", "", NOW))
+    store.write_group(Group("Web", "mixed", "", NOW))
+    store.write_group(Group("WEB", "upper", "", NOW))
+    names = [path.name.lower() for path in store.groups_dir.iterdir()]
+    assert len(names) == len(set(names)) == 3  # distinct even on a case-insensitive file system
+    assert store.group_path("web").name == "web.json"
+    assert [store.load_group(name).title for name in ("web", "Web", "WEB")] == ["lower", "mixed", "upper"]
+    assert store.clear_group("Web") and store.load_group("web") is not None and store.load_group("WEB") is not None
+
+
+def test_group_file_written_for_another_id_is_ignored(store):
+    store.write_group(Group("web", "lower"))
+    store.group_path("other").write_bytes(store.group_path("web").read_bytes())
+    assert store.load_group("other") is None
 
 
 def test_group_path_refuses_an_invalid_id(store):

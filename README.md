@@ -145,9 +145,10 @@ sebside group set --id release-4.18 --title "Release 4.18: payments and login" -
   pane of another group or of none); only a card without one takes its pane's group. A card without a stored group
   follows its pane's group, and once closed stays in the group its pane had when a sidebar or `sebside reconcile`
   last saw it (field `pane_group`).
-- `sebside group set` writes `groups/<id>.json` in the state directory (atomic, mode 0600). A grouped sidebar draws the
-  title in its footer, above the usage meter, word-wrapped over up to `group_lines` lines (3 by default; a longer
-  title ends with `…`), and the note dimmed on one line below. A change shows up at once. Without the file, or in a
+- `sebside group set` writes `groups/<id>.json` in the state directory (atomic, mode 0600; an id with upper-case
+  letters gets a hashed file name, so `Web` and `web` never share a file). A grouped sidebar draws the title in its
+  footer, above the usage meter, word-wrapped over up to `group_lines` lines (3 by default; a longer title ends with
+  `…`), and the note dimmed on one line below. A change shows up at once. Without the file, or in a
   session without a group, the footer is as before. `sebside group clear --id ID` removes it.
 
 ## Configuration

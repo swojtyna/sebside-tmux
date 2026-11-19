@@ -17,7 +17,8 @@ All notable changes to this project are documented here. The format follows
   card's `group` and filters with `--group ID`.
 - `sebside group set --id ID --title TEXT [--note TEXT]` / `sebside group clear --id ID`: a footer for one group's
   sidebars, above the usage meter: the title word-wrapped over up to `group_lines` lines (new config key, default 3,
-  also `SEBSIDE_GROUP_LINES`), the note dimmed below. Stored in `groups/<id>.json` (atomic, 0600); a change shows at once.
+  also `SEBSIDE_GROUP_LINES`), the note dimmed below. Stored in `groups/<id>.json` (atomic, 0600; a hashed name for an
+  id with upper-case letters, so ids that differ only in case never share a file); a change shows at once.
 - `sebside card update --id ID [--title] [--subtitle] [--desc] [--extra]`: changes only the given text of an existing
   card. State, pane, revision, age, seen mark and tmux options stay as they are, and tmux is not called. A missing
   card is a usage error (exit 2).

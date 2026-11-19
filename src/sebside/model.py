@@ -31,7 +31,7 @@ OPTION_SHARED_WIDTH = "@sebside_shared_width"  # global: the width every sidebar
 # Set by you or an integration (usually on a session), never by sebside: a sidebar in a session with a group shows
 # only the cards of that group. tmux resolves it pane -> window -> session -> global.
 OPTION_GROUP = "@sebside_group"
-GROUP_ID = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$")  # also the name of its file: groups/<id>.json
+GROUP_ID = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$")  # its file: groups/<id>.json (a hash for upper case)
 
 
 def valid_group(value: str) -> bool:

@@ -7,8 +7,8 @@
 - The directory is 0700 and files 0600; files are opened with `O_NOFOLLOW` and skipped unless owned by us.
 - `"schema": 1` per card. Unknown fields are ignored; a file with a newer schema is shown but never rewritten. Fields
   added later (such as `group` and `pane_group`) are optional: a file without them reads with their default.
-- Beside the cards: `meter.json` (the usage meter) and `groups/<group id>.json` (the footer of one group's sidebars),
-  written the same atomic, private way.
+- Beside the cards: `meter.json` (the usage meter) and `groups/<group id>.json` (the footer of one group's sidebars;
+  named like card files, with a hash for an id that has upper-case letters), written the same atomic, private way.
 """
 
 from __future__ import annotations
@@ -50,6 +50,14 @@ def file_name(card_id: str) -> str:
     if SAFE_ID.match(card_id) and not card_id.startswith("."):
         return f"{card_id}.json"
     return "id-" + hashlib.sha256(card_id.encode()).hexdigest()[:32] + ".json"
+
+
+def group_file_name(group_id: str) -> str:
+    """Like a card's: the id itself when it is lower case, otherwise a hash (the id is stored inside the file). Ids
+    that differ only in case, such as `Web` and `web`, so never share a file on a case-insensitive file system."""
+    if group_id == group_id.lower():
+        return f"{group_id}.json"
+    return "id-" + hashlib.sha256(group_id.encode()).hexdigest()[:32] + ".json"
 
 
 # (de)serialization: pure -------------------------------------------------------------------------
@@ -358,7 +366,7 @@ class Store:
     def group_path(self, group_id: str) -> Path:
         if not valid_group(group_id):
             raise StateError(f"{group_id!r} is not a group id: use letters, digits, '.', '_' and '-'")
-        return self.groups_dir / f"{group_id}.json"
+        return self.groups_dir / group_file_name(group_id)
 
     def write_group(self, group: Group) -> None:
         """Atomic write of one group's footer (temporary file + rename, 0600, directory 0700)."""
@@ -390,7 +398,7 @@ class Store:
 
     def load_group(self, group_id: str) -> Group | None:
         """One group's footer; None when the id is not valid, or the file is missing, not a regular file owned by
-        us, or not valid."""
+        us, not valid or written for another id."""
         if not valid_group(group_id):
             return None
         try:
@@ -405,7 +413,7 @@ class Store:
                 data = parse_json(handle.read(10_000))
         finally:
             os.close(descriptor)
-        if data is None:
+        if data is None or data.get("id") != group_id:
             return None
         title, note, at = data.get("title"), data.get("note", ""), data.get("at", 0)
         if not isinstance(title, str) or not title.strip() or not isinstance(note, str):
