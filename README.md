@@ -78,7 +78,7 @@ sidebar knows which pane the card belongs to and your status line can show the s
 | `--extra` | `extra` | right side of line 2 (line 1 when `show_age = false`) | nothing |
 | `--resume` | `resume` (argv list) | click or Enter on a closed card | not resumable |
 | `--cwd` | `cwd` | directory for resume | current directory |
-| `--group` | `group` | which sidebars show it (see [Groups](#groups)); `""` for none | the pane's `@sebside_group` |
+| `--group` | `group` | which sidebars show it (see [Groups](#groups)); `""` clears it | stored group, else the pane's `@sebside_group` |
 | (automatic) | `tmux`: socket, server pid, pane | which pane is live | `null` outside tmux |
 | (automatic) | `schema`, `rev`, `created_at`, `updated_at`, `closed_at` | age on the right | |
 
@@ -140,9 +140,10 @@ sebside group set --id release-4.18 --title "Release 4.18: payments and login" -
 - The option is read the way tmux resolves it (pane, then window, then session, then global), so a window or pane
   can have its own group. A group id is 1 to 100 letters, digits, `.`, `_` or `-`, not starting with a dot; any
   other value counts as no group.
-- `card set` stores the group of its pane in the card file (or `--group ID`), so a closed card stays in its group.
-  A card without a stored group follows its pane's group; one written outside tmux without `--group` keeps the group
-  it had.
+- `card set` stores the group of its pane in the card file, so a closed card stays in its group; `--group ID` stores
+  another one and `--group ""` clears it. Without `--group` a stored group stays as it is (outside tmux too, and in a
+  pane of another group or of none); only a card without one takes its pane's group. A card without a stored group
+  follows its pane's group.
 - `sebside group set` writes `groups/<id>.json` in the state directory (atomic, mode 0600). A grouped sidebar draws the
   title in its footer, above the usage meter, word-wrapped over up to `group_lines` lines (3 by default; a longer
   title ends with `…`), and the note dimmed on one line below. A change shows up at once. Without the file, or in a

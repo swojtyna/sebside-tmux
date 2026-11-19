@@ -163,10 +163,26 @@ def test_card_set_outside_tmux_keeps_the_group_unless_given(fake, in_tmux, env):
     assert Store.from_env(env).load("cron").group == "g2"
 
 
-def test_card_set_in_a_pane_without_group_stores_none(fake, env):
+def test_new_card_in_a_pane_without_group_stores_none(fake, env):
     other = {**env, "TMUX": f"{SOCKET},{SERVER_PID},0", "TMUX_PANE": "%5"}
     cli.main(["card", "set", "--id", "b", "--state", "working"], other)
     assert Store.from_env(env).load("b").group == ""
+
+
+def test_card_set_without_group_keeps_the_stored_group_in_a_pane_without_group(fake, env):
+    other = {**env, "TMUX": f"{SOCKET},{SERVER_PID},0", "TMUX_PANE": "%5"}
+    cli.main(["card", "set", "--id", "b", "--state", "working", "--group", "g1"], other)
+    cli.main(["card", "set", "--id", "b", "--state", "done"], other)
+    assert Store.from_env(env).load("b").group == "g1"
+
+
+def test_card_set_without_group_keeps_the_stored_group_in_a_pane_of_another_group(fake, in_tmux, env):
+    cli.main(["card", "set", "--id", "a", "--state", "working", "--group", "g2"], in_tmux)
+    cli.main(["card", "set", "--id", "a", "--state", "done"], in_tmux)
+    assert Store.from_env(env).load("a").group == "g2"
+    cli.main(["card", "set", "--id", "a", "--state", "done", "--group", ""], in_tmux)
+    cli.main(["card", "set", "--id", "a", "--state", "done"], in_tmux)
+    assert Store.from_env(env).load("a").group == "g1"  # cleared, so the next set takes the pane's group again
 
 
 @pytest.mark.parametrize("bad", ["a b", ".x", "x;y", "../etc"])

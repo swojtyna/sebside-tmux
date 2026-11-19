@@ -85,7 +85,9 @@ def _parser() -> argparse.ArgumentParser:
     set_.add_argument("--resume", help="command that brings the card back, split into words, run without a shell")
     set_.add_argument("--cwd", help="directory for resume (default: current directory)")
     set_.add_argument("--pane", help="target pane id (default: $TMUX_PANE)")
-    set_.add_argument("--group", help='group id (default: the pane\'s @sebside_group; "" for none)')
+    set_.add_argument(
+        "--group", help='group id (default: the stored group, else the pane\'s @sebside_group; "" clears it)'
+    )
 
     update = card.add_parser(
         "update", parents=[common], help="change text of an existing card; state, pane and age stay as they are"
@@ -251,8 +253,8 @@ def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
             updates["resume"] = resume
         if group is not None:
             updates["group"] = group
-        elif target is not None:
-            updates["group"] = target.group  # outside tmux without --group the card keeps its group
+        elif not record.group and target is not None:
+            updates["group"] = target.group  # without --group a stored group stays; with none stored, the pane's
         return replace(
             record,
             **updates,
