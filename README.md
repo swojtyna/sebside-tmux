@@ -78,6 +78,7 @@ sidebar knows which pane the card belongs to and your status line can show the s
 | `--extra` | `extra` | right side of line 2 (line 1 when `show_age = false`) | nothing |
 | `--resume` | `resume` (argv list) | click or Enter on a closed card | not resumable |
 | `--cwd` | `cwd` | directory for resume | current directory |
+| `--group` | `group` | which sidebars show it (see [Groups](#groups)); `""` for none | the pane's `@sebside_group` |
 | (automatic) | `tmux`: socket, server pid, pane | which pane is live | `null` outside tmux |
 | (automatic) | `schema`, `rev`, `created_at`, `updated_at`, `closed_at` | age on the right | |
 
@@ -87,6 +88,12 @@ States: `waiting`, `error`, `working`, `done`, `quiet`, `unknown`. Text is clean
 exists. On every refresh the sidebar closes cards whose pane is gone ("reconciliation"); the plugin's
 `session-closed` hook only nudges that. Pane ids reused after a tmux restart cannot claim an old card, because the
 server pid differs. A card set outside tmux has no pane, is shown without one, and stays open until you clear it.
+
+**Changing only the text.** `sebside card update --id build --subtitle "step 3 of 5"` changes the given text
+fields (`--title`, `--subtitle`, `--desc`, `--extra`) of an existing card and nothing else: not the state, not the
+pane it belongs to, not its age or revision (a done card you have looked at stays seen), and no tmux option. It never
+calls tmux, so it works the same from any pane or from outside tmux. A card that does not exist is an error (exit 2):
+create it with `card set` first.
 
 **Stale.** A card whose last update and last pane output are both older than `stale_hours` is shown as unknown.
 
@@ -101,16 +108,45 @@ never list a shell or interpreter (`bash`, `sh`, `python`, `ssh`, `npx`, `env`) 
 Other commands:
 
 ```sh
+sebside card update --id ID [--title T] [--subtitle S] [--desc D] [--extra E]   # text only, see above
 sebside card clear [--id ID] [--forget]   # close the card (keep it in history unless --forget)
 sebside meter set --label week --percent 47 --note "resets Fri 11:00"   # usage meter under the counter
 sebside meter clear
-sebside card list                         # live and recently closed cards as JSON
+sebside group set --id ID --title TEXT [--note TEXT]   # footer of the sidebars of one group (see Groups)
+sebside group clear --id ID
+sebside card list [--group ID]            # live and recently closed cards as JSON (only one group's with --group)
 sebside reconcile                         # close cards whose pane is gone (the hook runs this)
 sebside config path | show | get KEY
 sebside uninstall                         # remove hook, key binding, sidebar panes and @sebside_* pane options
 ```
 
 Exit codes: 0 ok, 1 runtime error, 2 usage error, 3 tmux missing or not running, 4 state not readable or writable.
+
+## Groups
+
+Many sessions for one project, release or team? Put them in a group, and the sidebar in each of them shows only that
+group's cards. The group is a tmux option you (or an integration) set, usually on the session; sebside reads it and
+never writes it:
+
+```sh
+tmux set-option -t api @sebside_group release-4.18
+tmux set-option -t web @sebside_group release-4.18
+sebside group set --id release-4.18 --title "Release 4.18: payments and login" --note "code freeze Thu 12:00"
+```
+
+- A sidebar in a session with `@sebside_group` shows only the live cards, the plain tmux sessions and the recently
+  closed cards of that group, and counts only those. A sidebar in a session without the option shows every card,
+  exactly as before.
+- The option is read the way tmux resolves it (pane, then window, then session, then global), so a window or pane
+  can have its own group. A group id is 1 to 100 letters, digits, `.`, `_` or `-`, not starting with a dot; any
+  other value counts as no group.
+- `card set` stores the group of its pane in the card file (or `--group ID`), so a closed card stays in its group.
+  A card without a stored group follows its pane's group; one written outside tmux without `--group` keeps the group
+  it had.
+- `sebside group set` writes `groups/<id>.json` in the state directory (atomic, mode 0600). A grouped sidebar draws the
+  title in its footer, above the usage meter, word-wrapped over up to `group_lines` lines (3 by default; a longer
+  title ends with `…`), and the note dimmed on one line below. A change shows up at once. Without the file, or in a
+  session without a group, the footer is as before. `sebside group clear --id ID` removes it.
 
 ## Configuration
 
@@ -126,6 +162,7 @@ refresh_seconds = 1.5  # tmux poll interval; card file changes show up at once
 show_age = true        # false hides the time on the right of line 1; the card's extra text takes its place
 sort = "attention"     # attention | recent | name
 resume_programs = []   # programs a closed card may be resumed with, e.g. ["vim", "my-agent"]
+group_lines = 3        # lines for the group title in the footer of a grouped sidebar
 
 [icons]                # several characters = animation frames
 waiting = "●"
@@ -142,7 +179,7 @@ exclude = ["scratch-*"]
 ```
 
 Environment variables beat the file; the `sebside sidebar` flags `--sort` and `--history` beat both: `SEBSIDE_WIDTH`, `SEBSIDE_HISTORY`, `SEBSIDE_STALE_HOURS`,
-`SEBSIDE_QUIET_MINUTES`, `SEBSIDE_REFRESH_SECONDS`, `SEBSIDE_SORT`; also `SEBSIDE_STATE_DIR`,
+`SEBSIDE_QUIET_MINUTES`, `SEBSIDE_REFRESH_SECONDS`, `SEBSIDE_SORT`, `SEBSIDE_GROUP_LINES`; also `SEBSIDE_STATE_DIR`,
 `SEBSIDE_TMUX_SOCKET` and `SEBSIDE_DEBUG=1` (debug log in the state directory).
 
 tmux options, set them **before** the plugin line in `tmux.conf`:
@@ -264,11 +301,12 @@ move the selection. Clicks on empty rows, the footer or the "recently closed" he
 **Which card is my session?** The card of the session this sidebar sits in has a bold `●` at the right end of its
 second line, in the card's state colour. It is separate from the selection, which only moves with keys or the mouse.
 
-**Where is my data?** Only in `~/.local/state/sebside/cards/` and in your tmux pane options. Nothing leaves your
-machine.
+**Where is my data?** Only in `~/.local/state/sebside/` (`cards/`, `groups/`, `meter.json`) and in your tmux pane
+options. Nothing leaves your machine.
 
 **How do I remove it?** Run `sebside uninstall`, remove the plugin line from `tmux.conf`, then
-`uv tool uninstall sebside-tmux`. Card files stay in the state directory until you delete them.
+`uv tool uninstall sebside-tmux`. Card files stay in the state directory until you delete them, and any
+`@sebside_group` you set stays on your sessions.
 
 ## Development
 
