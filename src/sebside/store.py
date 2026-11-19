@@ -7,6 +7,8 @@
 - The directory is 0700 and files 0600; files are opened with `O_NOFOLLOW` and skipped unless owned by us.
 - `"schema": 1` per card. Unknown fields are ignored; a file with a newer schema is shown but never rewritten. Fields
   added later (such as `group`) are optional: a file without them reads with their default.
+- Beside the cards: `meter.json` (the usage meter) and `groups/<group id>.json` (the footer of one group's sidebars),
+  written the same atomic, private way.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .errors import StateError
-from .model import SCHEMA, CardRecord, Meter, State, TmuxRef, parse_state, valid_group
+from .model import SCHEMA, CardRecord, Group, Meter, State, TmuxRef, parse_state, valid_group
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -147,6 +149,19 @@ def from_dict(data: Mapping[str, Any]) -> CardRecord | None:
 
 
 # files -------------------------------------------------------------------------------------------
+def _private_dir(path: Path) -> None:
+    """Create `path` (0700) under an existing parent; refuse one that is not a directory owned by us."""
+    try:
+        path.mkdir(mode=0o700, exist_ok=True)
+    except OSError as error:
+        raise StateError(f"cannot create {path}: {error.strerror}") from None
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise StateError(f"{path} is not a directory owned by you: remove it and try again")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        path.chmod(0o700)
+
+
 @dataclass
 class Store:
     root: Path  # the sebside state directory
@@ -169,21 +184,19 @@ class Store:
             root = self.root.lstat()
             if root.st_uid == os.getuid() and stat.S_IMODE(root.st_mode) & 0o077:
                 self.root.chmod(0o700)
-            self.cards_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         except OSError as error:
             raise StateError(f"cannot create {self.cards_dir}: {error.strerror}") from None
-        info = self.cards_dir.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-            raise StateError(f"{self.cards_dir} is not a directory owned by you: remove it and try again")
-        if stat.S_IMODE(info.st_mode) & 0o077:
-            self.cards_dir.chmod(0o700)
+        _private_dir(self.cards_dir)
 
-    def dir_stamp(self) -> int:
-        """Changes whenever a card file is added, replaced or removed (cheap check before a reload)."""
-        try:
-            return self.cards_dir.stat().st_mtime_ns
-        except OSError:
-            return 0
+    def dir_stamp(self) -> tuple[int, int]:
+        """Changes whenever a card or group file is added, replaced or removed (cheap check before a reload)."""
+        stamps: list[int] = []
+        for directory in (self.cards_dir, self.groups_dir):
+            try:
+                stamps.append(directory.stat().st_mtime_ns)
+            except OSError:
+                stamps.append(0)
+        return stamps[0], stamps[1]
 
     def _read(self, path: Path, private: bool = False) -> tuple[CardRecord | None, str]:
         """Parse one card file from the descriptor that was checked (no symlinks, owned by us; with `private`
@@ -335,6 +348,69 @@ class Store:
         if not isinstance(percent, int) or not isinstance(at, int | float) or isinstance(at, bool):
             return None
         return Meter(label, max(0, min(100, percent)), note, float(at))
+
+    @property
+    def groups_dir(self) -> Path:
+        return self.root / "groups"
+
+    def group_path(self, group_id: str) -> Path:
+        if not valid_group(group_id):
+            raise StateError(f"{group_id!r} is not a group id: use letters, digits, '.', '_' and '-'")
+        return self.groups_dir / f"{group_id}.json"
+
+    def write_group(self, group: Group) -> None:
+        """Atomic write of one group's footer (temporary file + rename, 0600, directory 0700)."""
+        target = self.group_path(group.id)
+        self.ensure_dir()
+        _private_dir(self.groups_dir)
+        descriptor, temporary = tempfile.mkstemp(prefix=".group-", suffix=".tmp", dir=self.groups_dir)
+        try:
+            os.fchmod(descriptor, 0o600)
+            data = {"id": group.id, "title": group.title, "note": group.note, "at": group.at}
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False)
+            Path(temporary).replace(target)
+        except BaseException as error:
+            with contextlib.suppress(OSError):
+                Path(temporary).unlink()
+            if isinstance(error, OSError):
+                raise StateError(f"cannot write {target}: {error.strerror}") from None
+            if isinstance(error, UnicodeError | ValueError):
+                raise StateError(f"cannot write {target}: text is not valid UTF-8") from None
+            raise
+
+    def clear_group(self, group_id: str) -> bool:
+        try:
+            self.group_path(group_id).unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def load_group(self, group_id: str) -> Group | None:
+        """One group's footer; None when the id is not valid, or the file is missing, not a regular file owned by
+        us, or not valid."""
+        if not valid_group(group_id):
+            return None
+        try:
+            descriptor = os.open(self.group_path(group_id), os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError:
+            return None
+        try:
+            info = os.fstat(descriptor)
+            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+                return None
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                data = parse_json(handle.read(10_000))
+        finally:
+            os.close(descriptor)
+        if data is None:
+            return None
+        title, note, at = data.get("title"), data.get("note", ""), data.get("at", 0)
+        if not isinstance(title, str) or not title.strip() or not isinstance(note, str):
+            return None
+        if not isinstance(at, int | float) or isinstance(at, bool):
+            return None
+        return Group(group_id, title, note, float(at))
 
     def update(self, card_id: str, change: Callable[[CardRecord | None], CardRecord | None]) -> CardRecord | None:
         """Read, change and write one card under the lock. `change` returns None to write nothing."""

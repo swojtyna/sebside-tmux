@@ -104,3 +104,14 @@ def test_show_age_must_be_bool():
     assert parse({}).show_age is True
     with pytest.raises(ConfigError, match="show_age"):
         parse({"show_age": "no"})
+
+
+def test_group_lines_default_file_env_and_minimum(tmp_path):
+    old = tmp_path / "old.toml"
+    old.write_text('width = 40\nsort = "name"\n')  # a config from before group_lines
+    assert load(old).group_lines == 3 and load(old).width == 40
+    assert parse({"group_lines": 1}).group_lines == 1
+    assert load_from_env({"SEBSIDE_CONFIG": str(old), "SEBSIDE_GROUP_LINES": "5"}).group_lines == 5
+    for bad in (0, "three", True):
+        with pytest.raises(ConfigError, match="group_lines"):
+            parse({"group_lines": bad})

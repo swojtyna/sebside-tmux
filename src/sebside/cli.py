@@ -1,5 +1,6 @@
-"""Command line: `sebside` (the sidebar), `sebside card ...`, `sebside reconcile`, `sebside config ...`,
-`sebside uninstall`. Every command is `run_<name>(ctx, args) -> int`; errors map to exit codes (see errors.py)."""
+"""Command line: `sebside` (the sidebar), `sebside card ...`, `sebside meter ...`, `sebside group ...`,
+`sebside reconcile`, `sebside config ...`, `sebside uninstall`. Every command is `run_<name>(ctx, args) -> int`;
+errors map to exit codes (see errors.py)."""
 
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ from .model import (
     OPTION_STATE,
     SIDEBAR_ROLE,
     CardRecord,
+    Group,
     Meter,
     State,
     TmuxRef,
@@ -101,6 +103,16 @@ def _parser() -> argparse.ArgumentParser:
     meter_set.add_argument("--percent", required=True, type=int, help="0..100")
     meter_set.add_argument("--note", default="", help="second line, e.g. when the limit resets")
     meter.add_parser("clear", parents=[common], help="remove the meter")
+
+    group = commands.add_parser("group", help="set or clear the footer of a group's sidebars").add_subparsers(
+        dest="group", required=True
+    )
+    group_set = group.add_parser("set", parents=[common], help="show a title and a note above the meter")
+    group_set.add_argument("--id", required=True, help="group id, the value of @sebside_group")
+    group_set.add_argument("--title", required=True, help="wrapped over up to group_lines lines")
+    group_set.add_argument("--note", default="", help="one dimmed line under the title")
+    group_clear = group.add_parser("clear", parents=[common], help="remove the group's footer")
+    group_clear.add_argument("--id", required=True, help="group id")
 
     commands.add_parser(
         "reconcile", parents=[common], help="close cards whose pane is gone (the session-closed hook calls this)"
@@ -437,9 +449,31 @@ def run_meter_clear(ctx: Context, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _group_id(value: str) -> str:
+    if not valid_group(value):
+        raise UsageError(f"--id {value!r} is not a group id: 1..100 letters, digits, '.', '_' or '-'")
+    return value
+
+
+def run_group_set(ctx: Context, args: argparse.Namespace) -> int:
+    group_id = _group_id(args.id)
+    title = _one_line(args.title, MAX_TEXT)
+    if not title:
+        raise UsageError("--title must not be empty")
+    ctx.store.write_group(Group(group_id, title, _one_line(args.note, MAX_TEXT), ctx.now))
+    return EXIT_OK
+
+
+def run_group_clear(ctx: Context, args: argparse.Namespace) -> int:
+    ctx.store.clear_group(_group_id(args.id))
+    return EXIT_OK
+
+
 COMMANDS: dict[str, Command] = {
     "meter set": run_meter_set,
     "meter clear": run_meter_clear,
+    "group set": run_group_set,
+    "group clear": run_group_clear,
     "sidebar": run_sidebar,
     "card set": run_card_set,
     "card clear": run_card_clear,
@@ -463,6 +497,8 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
         name = f"card {args.card}"
     if name == "meter":
         name = f"meter {args.meter}"
+    if name == "group":
+        name = f"group {args.group}"
     try:
         setup(debug, store.root)
         return COMMANDS[name](ctx, args)

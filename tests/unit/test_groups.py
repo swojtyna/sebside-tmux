@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
 
 from fakes import NOW, SERVER_PID, SOCKET, FakePane, FakeTmuxServer, pane, record
 from sebside import cli
-from sebside.cards import build
+from sebside.cards import Board, build
 from sebside.config import Config
-from sebside.errors import EXIT_USAGE
-from sebside.model import OPTION_GROUP, OPTION_ID, CardRecord, State, valid_group
+from sebside.errors import EXIT_USAGE, StateError
+from sebside.model import OPTION_GROUP, OPTION_ID, CardRecord, Group, Meter, State, valid_group
+from sebside.render import frame_rows, group_rows, text_width, to_plain
 from sebside.store import Store, from_dict, to_dict
 from sebside.tmux import PANE_FORMAT, Tmux, parse_panes
 from sebside.tui import App
@@ -211,3 +213,144 @@ def test_sidebar_without_a_group_shows_every_session(server, tmux, store):
     app.refresh()
     assert app.group == ""
     assert sorted(card.title for card in app.board.live) == ["a", "b"]
+
+
+# footer: store ------------------------------------------------------------------------------------
+def test_group_file_is_private_and_atomic(store):
+    store.write_group(Group("g1", "Release 4.18", "freeze Thu", NOW))
+    assert store.load_group("g1") == Group("g1", "Release 4.18", "freeze Thu", NOW)
+    assert stat.S_IMODE(store.group_path("g1").stat().st_mode) == 0o600
+    assert stat.S_IMODE(store.groups_dir.stat().st_mode) == 0o700
+    assert [p.name for p in store.groups_dir.iterdir()] == ["g1.json"]
+    assert store.clear_group("g1") and not store.clear_group("g1")
+    assert store.load_group("g1") is None
+
+
+def test_group_files_that_are_not_ours_or_not_valid_are_ignored(store, tmp_path):
+    store.write_group(Group("ok", "T"))
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps({"title": "evil"}))
+    store.group_path("link").symlink_to(outside)
+    store.group_path("broken").write_text("{nope")
+    store.group_path("empty").write_text(json.dumps({"title": "  "}))
+    store.group_path("typed").write_text(json.dumps({"title": "T", "note": 5}))
+    assert [store.load_group(name) for name in ("link", "broken", "empty", "typed", "missing", "../x")] == [None] * 6
+
+
+def test_group_path_refuses_an_invalid_id(store):
+    with pytest.raises(StateError):
+        store.group_path("../cards/x")
+
+
+def test_dir_stamp_changes_when_a_group_file_changes(store):
+    store.ensure_dir()
+    before = store.dir_stamp()
+    store.write_group(Group("g1", "T"))
+    assert store.dir_stamp() != before
+
+
+# footer: render -----------------------------------------------------------------------------------
+def _plain(rows):
+    return [to_plain(row).rstrip() for row in rows]
+
+
+def test_title_wraps_by_words_up_to_group_lines():
+    group = Group("g", "one two three four five six seven", "a note")
+    assert _plain(group_rows(group, 13, Config())) == ["one two", "three four", "five six se…", "a note"]
+    assert _plain(group_rows(group, 13, Config(group_lines=2))) == ["one two", "three four …", "a note"]
+
+
+def test_title_that_fits_has_no_ellipsis():
+    rows = _plain(group_rows(Group("g", "one two three four five six"), 13, Config()))
+    assert rows == ["one two", "three four", "five six"]
+    assert not any("…" in row for row in rows)
+
+
+def test_note_is_one_dimmed_line_cut_with_ellipsis():
+    rows = group_rows(Group("g", "T", "a very long note that does not fit"), 13, Config())
+    assert _plain(rows) == ["T", "a very long…"]
+    assert all(style.dim for _, style in rows[1] if _ not in ("", " "))
+    assert all(style.bold for ch, style in rows[0] if ch == "T")
+
+
+def test_wide_and_control_characters_stay_inside_the_width():
+    rows = group_rows(Group("g", "日本語テキスト\x1b[31m 日本語テキスト", "x\ny"), 9, Config())
+    assert all(len(row) == 9 for row in rows)
+    assert all(text_width(to_plain(row)) <= 9 for row in rows)
+
+
+def test_no_group_no_rows():
+    assert group_rows(None, 30, Config()) == []
+
+
+def test_group_footer_sits_between_counter_and_meter():
+    board = Board([])
+    meter = Meter("week", 50, "", NOW)
+    rows = _plain(frame_rows(board, None, 30, 14, Config(), NOW, meter=meter, group=Group("g", "Title", "note")))
+    counter = next(i for i, row in enumerate(rows) if row.startswith("nothing needs you"))
+    assert rows[counter + 1 : counter + 3] == ["Title", "note"]
+    assert rows[counter + 3].startswith("week ")
+
+
+def test_frame_without_a_group_is_unchanged():
+    board = Board([])
+    meter = Meter("week", 50, "", NOW)
+    assert frame_rows(board, None, 30, 14, Config(), NOW, meter=meter) == frame_rows(
+        board, None, 30, 14, Config(), NOW, meter=meter, group=None
+    )
+
+
+# footer: cli --------------------------------------------------------------------------------------
+def test_group_set_then_clear(env):
+    assert cli.main(["group", "set", "--id", "g1", "--title", "Release\n4.18", "--note", "freeze Thu"], env) == 0
+    group = Store.from_env(env).load_group("g1")
+    assert group is not None and (group.title, group.note) == ("Release 4.18", "freeze Thu")
+    assert cli.main(["group", "set", "--id", "g1", "--title", "Next"], env) == 0
+    group = Store.from_env(env).load_group("g1")
+    assert group is not None and (group.title, group.note) == ("Next", "")
+    assert cli.main(["group", "clear", "--id", "g1"], env) == 0
+    assert Store.from_env(env).load_group("g1") is None
+    assert cli.main(["group", "clear", "--id", "g1"], env) == 0  # nothing to clear is fine
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["group", "set", "--id", "a b", "--title", "T"],
+        ["group", "set", "--id", "../x", "--title", "T"],
+        ["group", "set", "--id", "g", "--title", " \n "],
+        ["group", "clear", "--id", ".x"],
+    ],
+)
+def test_invalid_group_commands_are_usage_errors(env, argv, capsys):
+    assert cli.main(argv, env) == EXIT_USAGE
+    assert capsys.readouterr().err.startswith("sebside: ")
+    assert not Store.from_env(env).groups_dir.exists()
+
+
+def test_group_commands_never_call_tmux(fake, in_tmux):
+    cli.main(["group", "set", "--id", "g1", "--title", "T"], in_tmux)
+    cli.main(["group", "clear", "--id", "g1"], in_tmux)
+    assert fake.calls == []
+
+
+# footer: sidebar ----------------------------------------------------------------------------------
+def test_sidebar_draws_its_group_footer(server, tmux, store):
+    server.panes += [FakePane("%1", "a", options={OPTION_GROUP: "g1"}), FakePane("%2", "b")]
+    store.write_group(Group("g1", "Release train", "freeze Thu"))
+    app = App(Config(), tmux, store, clock=lambda: NOW, socket_exists=lambda p: False, own_pane="%1")
+    app.refresh()
+    rows = _plain(app.rows(30, 12))
+    assert "Release train" in rows and "freeze Thu" in rows
+    app.own_pane = "%2"  # a session without a group: footer as before
+    app.refresh()
+    assert app.footer is None
+    assert not any("Release train" in row for row in _plain(app.rows(30, 12)))
+
+
+def test_sidebar_without_a_group_file_has_the_old_footer(server, tmux, store):
+    server.panes.append(FakePane("%1", "a", options={OPTION_GROUP: "g1"}))
+    app = App(Config(), tmux, store, clock=lambda: NOW, socket_exists=lambda p: False, own_pane="%1")
+    app.refresh()
+    assert app.footer is None
+    assert app.rows(30, 12)[-4:] == frame_rows(app.board, app.selected_key, 30, 12, Config(), NOW)[-4:]

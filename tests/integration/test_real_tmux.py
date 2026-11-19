@@ -429,3 +429,29 @@ def test_each_sidebar_shows_its_own_group(server: Server, tmp_path: Path):
     assert seen["alpha"] == (["one"], ["gone-1"])
     assert seen["beta"] == (["two"], ["gone-2"])
     assert seen["gamma"] == (["gamma", "one", "two"], ["gone-1", "gone-2"])  # no group: everything, as before
+
+
+def sidebar_text(server: Server, window: str) -> str:
+    sidebar = next(line.split()[0] for line in roles_of(server, window) if line.endswith(" sidebar"))
+    return server.tmux("capture-pane", "-p", "-t", sidebar)  # the test harness reads the screen, not sebside
+
+
+def test_real_sidebars_show_their_group_and_footer(server: Server, tmp_path: Path):
+    env = grouped_server(server, tmp_path)
+    assert cli.main(["group", "set", "--id", "g1", "--title", "Release train one", "--note", "freeze Thu"], env) == 0
+    bin_dir = str(Path(shutil.which("sebside") or REPO / ".venv" / "bin" / "sebside").parent)
+    env |= {"PATH": f"{bin_dir}:{env['PATH']}", "SEBSIDE_BIN": f"{bin_dir}/sebside"}
+    for name in ("XDG_STATE_HOME", "XDG_CONFIG_HOME"):
+        server.tmux("set-environment", "-g", name, env[name])  # the sidebar processes read the same state
+    windows = {s: server.tmux("display-message", "-p", "-t", f"={s}:", "#{window_id}") for s in ("alpha", "gamma")}
+    for window in windows.values():
+        assert cli.main(["open", "--target", window], env) == 0
+    assert wait_for(lambda: "Release train one" in sidebar_text(server, windows["alpha"]))
+    alpha = sidebar_text(server, windows["alpha"])
+    assert "freeze Thu" in alpha and "gone-1" in alpha
+    assert "beta" not in alpha and "gamma" not in alpha and "gone-2" not in alpha
+    assert wait_for(lambda: "gone-2" in sidebar_text(server, windows["gamma"]))
+    gamma = sidebar_text(server, windows["gamma"])
+    assert "Release train one" not in gamma and "gone-1" in gamma and "alpha" in gamma
+    assert cli.main(["group", "set", "--id", "g1", "--title", "Renamed"], env) == 0
+    assert wait_for(lambda: "Renamed" in sidebar_text(server, windows["alpha"]), seconds=1.0)  # the dir stamp

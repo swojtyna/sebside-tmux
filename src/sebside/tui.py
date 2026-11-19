@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 from .cards import Board, build, newly_seen, reconcile, server_of
 from .errors import SebsideError
 from .log import logger
-from .model import OPTION_ROLE, OPTION_SHARED_WIDTH, SIDEBAR_ROLE, Card, Meter, Pane, State
+from .model import OPTION_ROLE, OPTION_SHARED_WIDTH, SIDEBAR_ROLE, Card, Group, Meter, Pane, State
 from .render import Row, clean, frame_layout, to_ansi
 
 if TYPE_CHECKING:
@@ -126,6 +126,7 @@ class App:
     companion_seen: bool = False  # a non-sidebar pane has shared this window with us at least once
     row_keys: list[str | None] = field(default_factory=list)  # card key under each screen row, as last painted
     meter: Meter | None = None  # the usage meter under the counter, as last read
+    footer: Group | None = None  # the footer of this sidebar's group, as last read
 
     # data --------------------------------------------------------------------------------------------
     def refresh(self) -> None:
@@ -154,6 +155,7 @@ class App:
             logger().debug("reconcile closed=%s seen=%s", closed, sorted(seen))
             records = self.store.load_all()
         self.board = build(panes, records, self.config, now, self.home, self.group)
+        self.footer = self.store.load_group(self.group) if self.group else None
         keys = [card.key for card in self.board.cards]
         if self.selected_key not in keys:
             self.selected_key = keys[0] if keys else None
@@ -345,6 +347,7 @@ class App:
             resume_allowed=self.resume_allowed(),
             current_session=self.current_session,
             meter=self.meter,
+            group=self.footer,
         )
         return rows
 
@@ -527,7 +530,7 @@ def _run(app: App, own_pane: str | None) -> int:
     previous_handler = signal.signal(signal.SIGWINCH, resized)
     out = sys.stdout
     last_poll = 0.0
-    last_stamp = -1
+    last_stamp: tuple[int, int] | None = None
     last_paint = ""
     pending = ""
     previous_term = signal.signal(signal.SIGTERM, _exit_on_signal)

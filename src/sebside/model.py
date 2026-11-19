@@ -49,6 +49,16 @@ class Meter:
     at: float = 0.0  # when it was set (epoch seconds); an old meter is not drawn
 
 
+@dataclass(frozen=True, slots=True)
+class Group:
+    """The footer of the sidebars of one group: a title (wrapped) and a note under it."""
+
+    id: str
+    title: str
+    note: str = ""
+    at: float = 0.0  # when it was set (epoch seconds)
+
+
 def parse_state(value: str) -> State:
     try:
         return State(value.strip().lower())
