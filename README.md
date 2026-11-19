@@ -139,17 +139,21 @@ sebside group set --id backend --title "Backend: payments and login" --note "rev
   exactly as before.
 - The option is read the way tmux resolves it (pane, then window, then session, then global), so a window or pane
   can have its own group. A group id is 1 to 100 letters, digits, `.`, `_` or `-`, not starting with a dot; any
-  other value counts as no group.
+  other value counts as no group. An id that starts with `-` is given as `--id=-x` (or `--group=-x`).
 - `card set` stores the group of its pane in the card file, so a closed card stays in its group; `--group ID` stores
   another one and `--group ""` clears it. Without `--group` a stored group stays as it is (outside tmux too, and in a
-  pane of another group or of none); only a card without one takes its pane's group. A card without a stored group
-  follows its pane's group, and once closed stays in the group its pane had when a sidebar or `sebside reconcile`
-  last saw it (field `pane_group`).
+  pane of another group or of none); only a card without one takes its pane's group. The stored group wins over the
+  pane's, so when you move a session to another group, its cards move only with the next `card set --group ID`. A
+  card without a stored group follows its pane's group, and once closed stays in the group its pane had when a
+  sidebar or `sebside reconcile` last saw it (field `pane_group`).
+- sebside keeps the 50 newest closed cards (none older than 30 days) for all groups together, so a busy group can
+  push another group's closed cards out; `history` then sets how many of its group's cards each sidebar shows.
 - `sebside group set` writes `groups/<id>.json` in the state directory (atomic, mode 0600; an id with upper-case
   letters gets a hashed file name, so `Web` and `web` never share a file). A grouped sidebar draws the title in its
   footer, above the usage meter, word-wrapped over up to `group_lines` lines (3 by default; a longer title ends with
-  `…`), and the note dimmed on one line below. A change shows up at once. Without the file, or in a
-  session without a group, the footer is as before. `sebside group clear --id ID` removes it.
+  `…`), and the note dimmed on one line below, so the footer takes up to `group_lines` + 1 rows from the cards. A
+  change shows up at once. Without the file, or in a session without a group, the footer is as before.
+  `sebside group clear --id ID` removes it.
 
 ## Configuration
 
