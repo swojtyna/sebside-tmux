@@ -53,4 +53,3 @@ def test_no_rows_without_a_meter_or_when_it_is_old():
     assert meter_rows(None, 30, config, NOW) == []
     old = Meter("week", 50, "", NOW - config.stale_hours * 3600 - 1)
     assert meter_rows(old, 30, config, NOW) == []
-

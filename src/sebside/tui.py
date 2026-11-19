@@ -172,8 +172,11 @@ class App:
         if not self.companion_seen or self.tmux.option("@sebside-close-alone") == "off":
             return False
         logger().debug("sidebar %s is alone in %s:%s, closing", self.own_pane, mine.session, mine.window)
-        last_window = all((pane.session, pane.window) == (mine.session, mine.window) for pane in self.panes
-                          if pane.session == mine.session)
+        last_window = all(
+            (pane.session, pane.window) == (mine.session, mine.window)
+            for pane in self.panes
+            if pane.session == mine.session
+        )
         if last_window and self.tmux.resumed(mine.session):
             self.tmux.back()  # the session ends with this pane: return the viewer to where it came from
         return True
@@ -351,9 +354,7 @@ def code_fingerprint(root: Path = PACKAGE_DIR) -> tuple[tuple[str, int, int], ..
     """Name, mtime and size of every module of the installed package; None while the files cannot be read (for
     instance in the middle of an upgrade)."""
     try:
-        return tuple(
-            sorted((path.name, path.stat().st_mtime_ns, path.stat().st_size) for path in root.glob("*.py"))
-        )
+        return tuple(sorted((path.name, path.stat().st_mtime_ns, path.stat().st_size) for path in root.glob("*.py")))
     except OSError:
         return None
 
@@ -451,14 +452,14 @@ class WidthSync:
         if window is not None:
             self.window = window
         if columns == self.last and self.requested is not None:
-            self.requested = None   # the resize changed nothing (already at tmux's limit): the next change is the user's
+            self.requested = None  # the resize changed nothing (already at tmux's limit): the next change is the user's
         if self.last is None or columns != self.last:
             first, ours = self.last is None, self.requested is not None
             self.last, self.requested = columns, None
             if ours:
                 return
             if window_changed and not first:
-                self.tried_for = None   # follow the shared width again instead of publishing tmux's rescale
+                self.tried_for = None  # follow the shared width again instead of publishing tmux's rescale
                 if shared is not None and shared != columns:
                     self.requested = self.tried_for = shared
                     tmux.run("resize-pane", "-t", pane, "-x", str(shared))
@@ -535,7 +536,12 @@ def _run(app: App, own_pane: str | None) -> int:
                 last_poll, last_stamp = time.monotonic(), app.store.dir_stamp()
                 if app.alone():
                     return 0
-                widths.tick(app.tmux, app.own_pane, terminal_size(fd, app.config.width)[0], _window_width(app.tmux, app.own_pane))
+                widths.tick(
+                    app.tmux,
+                    app.own_pane,
+                    terminal_size(fd, app.config.width)[0],
+                    _window_width(app.tmux, app.own_pane),
+                )
             if watch.changed(time.monotonic()):
                 app.reload = True
                 return 0

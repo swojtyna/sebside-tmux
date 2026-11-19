@@ -384,9 +384,7 @@ def body_layout(
             rows.append(line(width, [("recently closed", muted)]))
             keys.append(None)
         start = len(rows)
-        rows += card_rows(
-            card, width, card.key == selected_key, config, now, frame, current_session=current_session
-        )
+        rows += card_rows(card, width, card.key == selected_key, config, now, frame, current_session=current_session)
         keys += [card.key] * (len(rows) - len(keys))
         if card.key == selected_key:
             span = (start, len(rows))
@@ -434,9 +432,7 @@ def frame_layout(
     elif mode == "confirm":
         body = confirm_rows(selected, width, config, resume_allowed)[:room]
     else:
-        rows, (start, end), keys = body_layout(
-            board, selected_key, width, config, now, frame, current_session
-        )
+        rows, (start, end), keys = body_layout(board, selected_key, width, config, now, frame, current_session)
         offset = max(0, end - room) if end > room else 0
         offset = min(offset, start)
         body = rows[offset : offset + room]

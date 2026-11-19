@@ -161,14 +161,18 @@ def test_current_session_card_gets_a_dot_on_line_two_at_the_right_edge():
     rows = card_rows(here, 36, False, Config(show_age=False), NOW, current_session="api")
     assert to_plain(rows[1]).endswith("api" + " " * 19 + "● ") and len(rows[1]) == 36
     assert to_plain(rows[1]).rstrip().endswith("●")
-    assert all("●" not in to_plain(row) for row in card_rows(other, 36, False, Config(), NOW, current_session="api")[1:])
+    assert all(
+        "●" not in to_plain(row) for row in card_rows(other, 36, False, Config(), NOW, current_session="api")[1:]
+    )
     assert all("●" not in to_plain(row) for row in card_rows(here, 36, False, Config(), NOW)[1:])
 
 
 def test_dot_follows_the_extra_text_without_breaking_width():
     rows = card_rows(card(extra="3/4", session="api"), 36, False, Config(), NOW, current_session="api")
     assert to_plain(rows[1]).endswith(" 3/4 ● ") and len(rows[1]) == 36
-    long = card_rows(card(subtitle="x" * 80, extra="3/4", session="api"), 36, False, Config(), NOW, current_session="api")
+    long = card_rows(
+        card(subtitle="x" * 80, extra="3/4", session="api"), 36, False, Config(), NOW, current_session="api"
+    )
     assert len(long[1]) == 36 and to_plain(long[1]).endswith("3/4 ● ")
 
 
