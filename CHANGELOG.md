@@ -9,7 +9,7 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - Groups: a sidebar in a session whose `@sebside_group` is set (by you or an integration, e.g.
-  `tmux set-option -t api @sebside_group release-4.18`; sebside never writes it) shows only that group's live,
+  `tmux set-option -t api @sebside_group backend`; sebside never writes it) shows only that group's live,
   default and recently closed cards. Sidebars in sessions without the option show everything, as before. `card set`
   stores the pane's group in the card file (optional field `group`, files without it still read) unless the card
   already has one, or takes `--group ID` (`""` clears it). A card without a group of its own follows its pane's group

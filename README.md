@@ -129,9 +129,9 @@ group's cards. The group is a tmux option you (or an integration) set, usually o
 never writes it:
 
 ```sh
-tmux set-option -t api @sebside_group release-4.18
-tmux set-option -t web @sebside_group release-4.18
-sebside group set --id release-4.18 --title "Release 4.18: payments and login" --note "code freeze Thu 12:00"
+tmux set-option -t api @sebside_group backend
+tmux set-option -t web @sebside_group backend
+sebside group set --id backend --title "Backend: payments and login" --note "review Thu"
 ```
 
 - A sidebar in a session with `@sebside_group` shows only the live cards, the plain tmux sessions and the recently

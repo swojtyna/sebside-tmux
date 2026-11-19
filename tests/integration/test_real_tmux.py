@@ -451,7 +451,7 @@ def sidebar_text(server: Server, window: str) -> str:
 
 def test_real_sidebars_show_their_group_and_footer(server: Server, tmp_path: Path):
     env = grouped_server(server, tmp_path)
-    assert cli.main(["group", "set", "--id", "g1", "--title", "Release train one", "--note", "freeze Thu"], env) == 0
+    assert cli.main(["group", "set", "--id", "g1", "--title", "Backend team", "--note", "review Thu"], env) == 0
     bin_dir = str(Path(shutil.which("sebside") or REPO / ".venv" / "bin" / "sebside").parent)
     env |= {"PATH": f"{bin_dir}:{env['PATH']}", "SEBSIDE_BIN": f"{bin_dir}/sebside"}
     for name in ("XDG_STATE_HOME", "XDG_CONFIG_HOME"):
@@ -459,12 +459,12 @@ def test_real_sidebars_show_their_group_and_footer(server: Server, tmp_path: Pat
     windows = {s: server.tmux("display-message", "-p", "-t", f"={s}:", "#{window_id}") for s in ("alpha", "gamma")}
     for window in windows.values():
         assert cli.main(["open", "--target", window], env) == 0
-    assert wait_for(lambda: "Release train one" in sidebar_text(server, windows["alpha"]))
+    assert wait_for(lambda: "Backend team" in sidebar_text(server, windows["alpha"]))
     alpha = sidebar_text(server, windows["alpha"])
-    assert "freeze Thu" in alpha and "gone-1" in alpha
+    assert "review Thu" in alpha and "gone-1" in alpha
     assert "beta" not in alpha and "gamma" not in alpha and "gone-2" not in alpha
     assert wait_for(lambda: "gone-2" in sidebar_text(server, windows["gamma"]))
     gamma = sidebar_text(server, windows["gamma"])
-    assert "Release train one" not in gamma and "gone-1" in gamma and "alpha" in gamma
+    assert "Backend team" not in gamma and "gone-1" in gamma and "alpha" in gamma
     assert cli.main(["group", "set", "--id", "g1", "--title", "Renamed"], env) == 0
     assert wait_for(lambda: "Renamed" in sidebar_text(server, windows["alpha"]), seconds=1.0)  # the dir stamp

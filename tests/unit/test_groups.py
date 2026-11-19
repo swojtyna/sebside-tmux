@@ -319,8 +319,8 @@ def test_sidebar_without_a_group_shows_every_session(server, tmux, store):
 
 # footer: store ------------------------------------------------------------------------------------
 def test_group_file_is_private_and_atomic(store):
-    store.write_group(Group("g1", "Release 4.18", "freeze Thu", NOW))
-    assert store.load_group("g1") == Group("g1", "Release 4.18", "freeze Thu", NOW)
+    store.write_group(Group("g1", "Backend: payments and login", "review Thu", NOW))
+    assert store.load_group("g1") == Group("g1", "Backend: payments and login", "review Thu", NOW)
     assert stat.S_IMODE(store.group_path("g1").stat().st_mode) == 0o600
     assert stat.S_IMODE(store.groups_dir.stat().st_mode) == 0o700
     assert [p.name for p in store.groups_dir.iterdir()] == ["g1.json"]
@@ -421,9 +421,9 @@ def test_frame_without_a_group_is_unchanged():
 
 # footer: cli --------------------------------------------------------------------------------------
 def test_group_set_then_clear(env):
-    assert cli.main(["group", "set", "--id", "g1", "--title", "Release\n4.18", "--note", "freeze Thu"], env) == 0
+    assert cli.main(["group", "set", "--id", "g1", "--title", "Backend:\npayments", "--note", "review Thu"], env) == 0
     group = Store.from_env(env).load_group("g1")
-    assert group is not None and (group.title, group.note) == ("Release 4.18", "freeze Thu")
+    assert group is not None and (group.title, group.note) == ("Backend: payments", "review Thu")
     assert cli.main(["group", "set", "--id", "g1", "--title", "Next"], env) == 0
     group = Store.from_env(env).load_group("g1")
     assert group is not None and (group.title, group.note) == ("Next", "")
@@ -456,15 +456,15 @@ def test_group_commands_never_call_tmux(fake, in_tmux):
 # footer: sidebar ----------------------------------------------------------------------------------
 def test_sidebar_draws_its_group_footer(server, tmux, store):
     server.panes += [FakePane("%1", "a", options={OPTION_GROUP: "g1"}), FakePane("%2", "b")]
-    store.write_group(Group("g1", "Release train", "freeze Thu"))
+    store.write_group(Group("g1", "Backend team", "review Thu"))
     app = App(Config(), tmux, store, clock=lambda: NOW, socket_exists=lambda p: False, own_pane="%1")
     app.refresh()
     rows = _plain(app.rows(30, 12))
-    assert "Release train" in rows and "freeze Thu" in rows
+    assert "Backend team" in rows and "review Thu" in rows
     app.own_pane = "%2"  # a session without a group: footer as before
     app.refresh()
     assert app.footer is None
-    assert not any("Release train" in row for row in _plain(app.rows(30, 12)))
+    assert not any("Backend team" in row for row in _plain(app.rows(30, 12)))
 
 
 def test_sidebar_without_a_group_file_has_the_old_footer(server, tmux, store):
