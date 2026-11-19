@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -27,6 +28,15 @@ OPTION_ROLE = "@sebside_role"
 OPTION_RESUMED = "@sebside_resumed"  # session option: sebside resumed this session from a closed card
 SIDEBAR_ROLE = "sidebar"
 OPTION_SHARED_WIDTH = "@sebside_shared_width"  # global: the width every sidebar follows; a drag of one sets it
+# Set by you or an integration (usually on a session), never by sebside: a sidebar in a session with a group shows
+# only the cards of that group. tmux resolves it pane -> window -> session -> global.
+OPTION_GROUP = "@sebside_group"
+GROUP_ID = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$")  # also the name of its file: groups/<id>.json
+
+
+def valid_group(value: str) -> bool:
+    """A group id: 1..100 characters of letters, digits, `.`, `_` and `-`, not starting with a dot."""
+    return bool(GROUP_ID.match(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +84,7 @@ class CardRecord:
     updated_at: float = 0.0
     closed_at: float | None = None
     seen_rev: int = 0  # the done rev the user has looked at
+    group: str = ""  # the group it belongs to; "" follows its pane's group (and none outside tmux)
     schema: int = SCHEMA
     readonly: bool = False  # written by a newer sebside: shown, never rewritten
 
@@ -105,6 +116,7 @@ class Pane:
     server_pid: int
     card_id: str = ""  # @sebside_id
     role: str = ""  # @sebside_role, "sidebar" for sebside's own panes
+    group: str = ""  # @sebside_group as tmux resolves it for this pane ("" when unset or not a valid id)
 
     @property
     def is_sidebar(self) -> bool:
@@ -137,6 +149,7 @@ class Card:
     in_tmux: bool = True  # False for an open card written outside tmux
     stale: bool = False
     seen: bool = False
+    group: str = ""
     sources: dict[str, str] = field(default_factory=dict)  # field -> where the value came from
 
     @property

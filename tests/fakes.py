@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from sebside.model import OPTION_ID, OPTION_ROLE, CardRecord, Pane, State, TmuxRef
+from sebside.model import OPTION_GROUP, OPTION_ID, OPTION_ROLE, CardRecord, Pane, State, TmuxRef
 from sebside.tmux import FIELD_SEP, PANE_FIELDS, RECORD_SEP, Completed
 
 NOW = 1_800_000_000.0
@@ -60,6 +60,7 @@ class FakeTmuxServer:
             "pid": str(self.pid),
             OPTION_ID: pane.options.get(OPTION_ID, ""),
             OPTION_ROLE: pane.options.get(OPTION_ROLE, ""),
+            OPTION_GROUP: pane.options.get(OPTION_GROUP, ""),  # what tmux resolves (pane, window or session)
         }
         return FIELD_SEP.join(values[name] for name in PANE_FIELDS) + RECORD_SEP
 
@@ -81,7 +82,13 @@ class FakeTmuxServer:
             return Completed(0, "120\n", "")  # window_width
         if command == "display-message":
             pane = self.pane(rest[rest.index("-t") + 1])
-            values = [str(self.pid), self.socket, pane.options.get(OPTION_ID, ""), pane.pane_id]
+            values = [
+                str(self.pid),
+                self.socket,
+                pane.options.get(OPTION_ID, ""),
+                pane.pane_id,
+                pane.options.get(OPTION_GROUP, ""),
+            ]
             return Completed(0, FIELD_SEP.join(values) + "\n", "")
         if command == "set-option":
             index = rest.index("-t")
@@ -118,6 +125,7 @@ def pane(
     attached: bool = False,
     socket: str = SOCKET,
     server_pid: int = SERVER_PID,
+    group: str = "",
 ) -> Pane:
     return Pane(
         session=session,
@@ -133,6 +141,7 @@ def pane(
         server_pid=server_pid,
         card_id=card_id,
         role=role,
+        group=group,
     )
 
 

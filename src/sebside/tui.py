@@ -7,6 +7,8 @@ are skipped when nothing changed.
 Towards tmux the sidebar is read-only, except: switch-client / select-window / select-pane to show a card,
 new-session to resume a closed card (argv, no shell, only allowlisted programs, after you confirm), and its own pane
 option `@sebside_role`. It writes card files only to close vanished cards and to remember seen done cards.
+
+In a session whose `@sebside_group` is set, the sidebar shows only the cards of that group and the group's footer.
 """
 
 from __future__ import annotations
@@ -151,7 +153,7 @@ class App:
             self.store.mark_seen(seen)
             logger().debug("reconcile closed=%s seen=%s", closed, sorted(seen))
             records = self.store.load_all()
-        self.board = build(panes, records, self.config, now, self.home)
+        self.board = build(panes, records, self.config, now, self.home, self.group)
         keys = [card.key for card in self.board.cards]
         if self.selected_key not in keys:
             self.selected_key = keys[0] if keys else None
@@ -314,6 +316,12 @@ class App:
             return
         self.tmux.show(name, "", "")
         self.message = f"resumed in session {name}"
+
+    @property
+    def group(self) -> str:
+        """The group of the session this sidebar sits in ("" when it has none, or while the pane is unknown)."""
+        mine = next((pane for pane in self.panes if pane.pane_id == self.own_pane), None)
+        return mine.group if mine else ""
 
     @property
     def current_session(self) -> str | None:

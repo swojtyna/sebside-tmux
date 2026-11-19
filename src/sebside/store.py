@@ -5,7 +5,8 @@
 - Read-modify-write and pruning hold `fcntl.flock` on `cards/.lock`, so the sidebar and `card set` never lose
   each other's changes.
 - The directory is 0700 and files 0600; files are opened with `O_NOFOLLOW` and skipped unless owned by us.
-- `"schema": 1` per card. Unknown fields are ignored; a file with a newer schema is shown but never rewritten.
+- `"schema": 1` per card. Unknown fields are ignored; a file with a newer schema is shown but never rewritten. Fields
+  added later (such as `group`) are optional: a file without them reads with their default.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .errors import StateError
-from .model import SCHEMA, CardRecord, Meter, State, TmuxRef, parse_state
+from .model import SCHEMA, CardRecord, Meter, State, TmuxRef, parse_state, valid_group
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -69,6 +70,7 @@ def to_dict(record: CardRecord) -> dict[str, Any]:
         "updated_at": record.updated_at,
         "closed_at": record.closed_at,
         "seen_rev": record.seen_rev,
+        "group": record.group,
     }
 
 
@@ -122,6 +124,7 @@ def from_dict(data: Mapping[str, Any]) -> CardRecord | None:
     raw_resume = data.get("resume", [])
     resume = tuple(raw_resume) if isinstance(raw_resume, list) and all(isinstance(a, str) for a in raw_resume) else ()
     closed = data.get("closed_at")
+    group = _str(data, "group")
     return CardRecord(
         id=card_id,
         state=state,
@@ -137,6 +140,7 @@ def from_dict(data: Mapping[str, Any]) -> CardRecord | None:
         updated_at=_num(data, "updated_at"),
         closed_at=_finite(closed),
         seen_rev=int(_num(data, "seen_rev")),
+        group=group if valid_group(group) else "",
         schema=schema,
         readonly=schema > SCHEMA,
     )

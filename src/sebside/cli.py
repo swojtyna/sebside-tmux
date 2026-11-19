@@ -22,6 +22,7 @@ from .config import SORTS, Config, config_path, load_from_env
 from .errors import EXIT_OK, SebsideError, StateError, TmuxError, UsageError
 from .log import logger, setup
 from .model import (
+    OPTION_GROUP,
     OPTION_ID,
     OPTION_ROLE,
     OPTION_STATE,
@@ -31,6 +32,7 @@ from .model import (
     State,
     TmuxRef,
     parse_state,
+    valid_group,
 )
 from .render import clean
 from .store import Store
@@ -81,13 +83,15 @@ def _parser() -> argparse.ArgumentParser:
     set_.add_argument("--resume", help="command that brings the card back, split into words, run without a shell")
     set_.add_argument("--cwd", help="directory for resume (default: current directory)")
     set_.add_argument("--pane", help="target pane id (default: $TMUX_PANE)")
+    set_.add_argument("--group", help='group id (default: the pane\'s @sebside_group; "" for none)')
 
     clear = card.add_parser("clear", parents=[common], help="close a card (it stays in history unless --forget)")
     clear.add_argument("--id", help="card id (default: the card on $TMUX_PANE)")
     clear.add_argument("--pane", help="target pane id (default: $TMUX_PANE)")
     clear.add_argument("--forget", action="store_true", help="delete the card file too")
 
-    card.add_parser("list", parents=[common], help="print live and recently closed cards as JSON")
+    list_ = card.add_parser("list", parents=[common], help="print live and recently closed cards as JSON")
+    list_.add_argument("--group", help="only the cards of this group, as a sidebar in that group shows them")
 
     meter = commands.add_parser("meter", help="set or clear the usage meter under the counter").add_subparsers(
         dest="meter", required=True
@@ -156,6 +160,7 @@ class Target:
     tmux: Tmux
     ref: TmuxRef
     previous_id: str
+    group: str = ""  # the pane's @sebside_group as tmux resolves it ("" when unset or not a valid id)
 
 
 def _target(args: argparse.Namespace, env: Mapping[str, str]) -> Target | None:
@@ -167,14 +172,24 @@ def _target(args: argparse.Namespace, env: Mapping[str, str]) -> Target | None:
     if socket is None:
         raise UsageError("--pane needs a tmux server: pass --socket or run inside tmux")
     tmux = _tmux(args, env)
-    fmt = FIELD_SEP.join([format_field("pid"), format_field("socket_path"), format_field(OPTION_ID), "#{pane_id}"])
-    done = tmux.display(pane, fmt)
+    names = ("pid", "socket_path", OPTION_ID, "pane_id", OPTION_GROUP)
+    done = tmux.display(pane, FIELD_SEP.join(format_field(name) for name in names))
     if not done.ok:
         raise TmuxError(f"cannot read pane {pane}: {done.error}")
     values = done.stdout.rstrip("\n").split(FIELD_SEP)
-    if len(values) != 4 or not values[0].isdigit() or not PANE_ID.match(values[3]):
+    if len(values) != len(names) or not values[0].isdigit() or not PANE_ID.match(values[3]):
         raise TmuxError(f"unexpected tmux answer for pane {pane}: is it tmux 3.0 or newer?")
-    return Target(tmux, TmuxRef(values[1], int(values[0]), values[3]), values[2])
+    group = values[4] if valid_group(values[4]) else ""
+    return Target(tmux, TmuxRef(values[1], int(values[0]), values[3]), values[2], group)
+
+
+def _group_arg(value: str | None, *, empty: bool = False) -> str | None:
+    """A --group value: None when not given; "" (no group) only where `empty` allows it."""
+    if value is None or (empty and value == ""):
+        return value
+    if not valid_group(value):
+        raise UsageError(f"--group {value!r} is not a group id: 1..100 letters, digits, '.', '_' or '-'")
+    return value
 
 
 def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
@@ -191,10 +206,8 @@ def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
         raise UsageError(f"--resume: {error}") from None
     if resume is not None and not all(_utf8(word) and word.isprintable() for word in resume):
         raise UsageError("--resume must be printable UTF-8 text")
-    fields = (("title", args.title), ("subtitle", args.subtitle), ("desc", args.desc), ("extra", args.extra))
-    text = {
-        name: _one_line(value, MAX_DESC if name == "desc" else MAX_TEXT) for name, value in fields if value is not None
-    }
+    group = _group_arg(args.group, empty=True)
+    text = _text_fields(args)
     target = _target(args, ctx.env)
     if target is not None:
         if target.previous_id and target.previous_id != card_id:
@@ -210,6 +223,10 @@ def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
         updates: dict[str, Any] = dict(text)
         if resume is not None:
             updates["resume"] = resume
+        if group is not None:
+            updates["group"] = group
+        elif target is not None:
+            updates["group"] = target.group  # outside tmux without --group the card keeps its group
         return replace(
             record,
             **updates,
@@ -227,6 +244,14 @@ def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
     where = f"pane {record.tmux.pane}" if record.tmux else "outside tmux"
     print(f"card {clean(record.id)}: {record.state.value} (rev {record.rev}, {where})")
     return EXIT_OK
+
+
+def _text_fields(args: argparse.Namespace) -> dict[str, str]:
+    """The text flags that were given, each made one clean line of at most its length."""
+    fields = (("title", args.title), ("subtitle", args.subtitle), ("desc", args.desc), ("extra", args.extra))
+    return {
+        name: _one_line(value, MAX_DESC if name == "desc" else MAX_TEXT) for name, value in fields if value is not None
+    }
 
 
 def _utf8(text: str) -> bool:
@@ -284,7 +309,8 @@ def run_card_clear(ctx: Context, args: argparse.Namespace) -> int:
 def run_card_list(ctx: Context, args: argparse.Namespace) -> int:
     config = _config(args, ctx.env)
     panes = _tmux(args, ctx.env).list_panes() if _socket(args, ctx.env) else []
-    board = build(panes or [], ctx.store.load_all(), config, ctx.now, ctx.env.get("HOME", ""))
+    group = _group_arg(args.group) or ""
+    board = build(panes or [], ctx.store.load_all(), config, ctx.now, ctx.env.get("HOME", ""), group)
     payload = {"live": [asdict(card) for card in board.live], "history": [asdict(card) for card in board.history]}
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return EXIT_OK

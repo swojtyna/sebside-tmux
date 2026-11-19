@@ -21,9 +21,10 @@ import pytest
 from sebside import cli
 from sebside.cards import build
 from sebside.config import Config
-from sebside.model import OPTION_ID, OPTION_STATE, State
+from sebside.model import OPTION_GROUP, OPTION_ID, OPTION_STATE, State
 from sebside.store import Store
 from sebside.tmux import Tmux
+from sebside.tui import App
 
 pytestmark = [
     pytest.mark.tmux,
@@ -387,3 +388,44 @@ def test_close_alone_off_keeps_the_sidebar_and_the_session(server: Server, tmp_p
     assert wait_for(lambda: main_panes(server, window) == [])
     time.sleep(3.5)
     assert sidebar_count(server, window) == 1 and "gamma" in sessions(server)
+
+
+# Groups --------------------------------------------------------------------------------------------------------
+
+
+def test_group_option_on_a_session_is_inherited_by_its_panes(server: Server):
+    server.tmux("set-option", "-t", "alpha", OPTION_GROUP, "g1")
+    server.tmux("split-window", "-d", "-t", "=alpha:", "sleep 600")
+    panes = Tmux.create(server.socket).list_panes()
+    assert panes is not None
+    assert sorted((p.session, p.group) for p in panes) == [("alpha", "g1"), ("alpha", "g1"), ("beta", "")]
+
+
+def grouped_server(server: Server, tmp_path: Path) -> dict[str, str]:
+    """alpha in group g1, beta in group g2, gamma without a group; a card and a closed card in each group."""
+    server.tmux("new-session", "-d", "-s", "gamma", "-x", "100", "-y", "30", "sleep 600")
+    server.tmux("set-option", "-t", "alpha", OPTION_GROUP, "g1")
+    server.tmux("set-option", "-t", "beta", OPTION_GROUP, "g2")
+    for session, card in (("alpha", "one"), ("beta", "two")):
+        pane = server.tmux("display-message", "-p", "-t", f"={session}:", "#{pane_id}")
+        assert cli.main(["card", "set", "--id", card, "--state", "working"], env_for(server, tmp_path, pane)) == 0
+    env = env_for(server, tmp_path)
+    for card, group in (("gone-1", "g1"), ("gone-2", "g2")):
+        assert cli.main(["card", "set", "--id", card, "--state", "done", "--group", group], env) == 0
+        assert cli.main(["card", "clear", "--id", card], env) == 0
+    return env
+
+
+def test_each_sidebar_shows_its_own_group(server: Server, tmp_path: Path):
+    env = grouped_server(server, tmp_path)
+    store = Store.from_env(env)
+    seen: dict[str, tuple[list[str], list[str]]] = {}
+    for session in ("alpha", "beta", "gamma"):
+        own = server.tmux("display-message", "-p", "-t", f"={session}:", "#{pane_id}")
+        app = App(Config(), Tmux.create(server.socket), store, home=str(tmp_path), own_pane=own)
+        app.refresh()
+        live = sorted(card.card_id or card.title for card in app.board.live)
+        seen[session] = (live, sorted(card.card_id for card in app.board.history))
+    assert seen["alpha"] == (["one"], ["gone-1"])
+    assert seen["beta"] == (["two"], ["gone-2"])
+    assert seen["gamma"] == (["gamma", "one", "two"], ["gone-1", "gone-2"])  # no group: everything, as before

@@ -12,6 +12,9 @@ Rules:
 - A card is stale (shown as unknown) when max(card updated_at, pane activity) is older than `stale_hours`.
 - A done card the user has looked at (`seen_rev` >= rev) is shown as quiet.
 - Closed cards: newest first, at most `history`, never one whose id is live.
+- Groups: a card's group is the one stored in its file; a card without one follows its pane's `@sebside_group`. A
+  default card has its pane's group. With a group (the sidebar's own session has one), only the cards of that group
+  are shown, live and closed; without one, every card is shown.
 """
 
 from __future__ import annotations
@@ -149,6 +152,7 @@ def card_from_record(record: CardRecord, pane: Pane | None, config: Config, now:
         in_tmux=pane is not None,
         stale=stale,
         seen=seen,
+        group=record.group or (pane.group if pane else ""),
         sources=sources,
     )
 
@@ -171,6 +175,7 @@ def default_card(pane: Pane, config: Config, now: float, home: str) -> Card:
         window=pane.window,
         pane_id=pane.pane_id,
         since=float(pane.activity) if pane.activity else None,
+        group=pane.group,
         sources={
             "title": "tmux: session name",
             "subtitle": "tmux: pane directory",
@@ -194,6 +199,7 @@ def history_card(record: CardRecord, home: str) -> Card:
         since=record.closed_at,
         rev=record.rev,
         live=False,
+        group=record.group,
         sources={
             "state": "card file: last state before the card closed",
             "age": "card file: time the card closed",
@@ -222,7 +228,15 @@ def sort_key(card: Card, sort: str) -> tuple[object, ...]:
     return (STATE_ORDER.index(card.state), card.title.lower(), card.session, card.pane_id)
 
 
-def build(panes: list[Pane], records: Mapping[str, CardRecord], config: Config, now: float, home: str = "") -> Board:
+def build(
+    panes: list[Pane],
+    records: Mapping[str, CardRecord],
+    config: Config,
+    now: float,
+    home: str = "",
+    group: str = "",
+) -> Board:
+    """The cards to draw. With `group`, only that group's cards (live, default and closed); "" shows every card."""
     server = server_of(panes)
     by_id = {pane.pane_id: pane for pane in panes}
     live: list[Card] = []
@@ -239,18 +253,20 @@ def build(panes: list[Pane], records: Mapping[str, CardRecord], config: Config, 
         live_ids.add(record.id)
         if pane is not None:
             carded_sessions.add(pane.session)
-        live.append(card_from_record(record, pane, config, now, home))
+        card = card_from_record(record, pane, config, now, home)
+        if not group or card.group == group:
+            live.append(card)
     by_session: dict[str, list[Pane]] = {}
     for pane in panes:
         if config.filter.allows(pane.session) and pane.session not in carded_sessions:
             by_session.setdefault(pane.session, []).append(pane)
     for session_panes in by_session.values():
         chosen = representative(session_panes)
-        if chosen is not None:
+        if chosen is not None and (not group or chosen.group == group):
             live.append(default_card(chosen, config, now, home))
     live.sort(key=lambda card: sort_key(card, config.sort))
     closed = sorted(
-        (r for r in records.values() if r.closed and r.id not in live_ids),
+        (r for r in records.values() if r.closed and r.id not in live_ids and (not group or r.group == group)),
         key=lambda r: r.closed_at or 0.0,
         reverse=True,
     )
