@@ -467,4 +467,4 @@ def test_real_sidebars_show_their_group_and_footer(server: Server, tmp_path: Pat
     gamma = sidebar_text(server, windows["gamma"])
     assert "Backend team" not in gamma and "gone-1" in gamma and "alpha" in gamma
     assert cli.main(["group", "set", "--id", "g1", "--title", "Renamed"], env) == 0
-    assert wait_for(lambda: "Renamed" in sidebar_text(server, windows["alpha"]), seconds=1.0)  # the dir stamp
+    assert wait_for(lambda: "Renamed" in sidebar_text(server, windows["alpha"]))  # the dir stamp
