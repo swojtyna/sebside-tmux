@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .cards import build, reconcile, server_of
+from .cards import build, pane_groups, reconcile, server_of
 from .config import SORTS, Config, config_path, load_from_env
 from .errors import EXIT_OK, SebsideError, StateError, TmuxError, UsageError
 from .log import logger, setup
@@ -255,6 +255,7 @@ def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
             updates["group"] = group
         elif not record.group and target is not None:
             updates["group"] = target.group  # without --group a stored group stays; with none stored, the pane's
+        updates["pane_group"] = target.group if target else ""
         return replace(
             record,
             **updates,
@@ -324,7 +325,7 @@ def _close_if_on(ctx: Context, target: Target) -> bool:
     previous = ctx.store.load(target.previous_id)
     if previous is None or previous.tmux != target.ref:
         return False
-    return bool(ctx.store.close([target.previous_id], ctx.now, {previous.id: previous.rev}))
+    return bool(ctx.store.close([previous.id], ctx.now, {previous.id: previous.rev}, {previous.id: target.group}))
 
 
 def _set_option(target: Target, name: str, value: str) -> None:
@@ -351,7 +352,9 @@ def run_card_clear(ctx: Context, args: argparse.Namespace) -> int:
             card_id = target.previous_id
     if not card_id:
         raise UsageError("no card to clear: pass --id, or run inside a pane that has a card")
-    done = ctx.store.delete(card_id) if args.forget else bool(ctx.store.close([card_id], ctx.now))
+    current = ctx.store.load(card_id) if target is not None else None
+    groups = {card_id: target.group} if target is not None and current and current.tmux == target.ref else None
+    done = ctx.store.delete(card_id) if args.forget else bool(ctx.store.close([card_id], ctx.now, None, groups))
     verb = "forgot" if args.forget else "closed"
     print(f"{verb} {clean(card_id)}" if done else f"{clean(card_id)}: nothing to do")
     return EXIT_OK
@@ -372,8 +375,10 @@ def run_reconcile(ctx: Context, args: argparse.Namespace) -> int:
     if panes is None:
         raise TmuxError("tmux did not answer: try again")
     records = ctx.store.load_all()
-    gone = reconcile(records, panes, server_of(panes), lambda path: Path(path).exists(), ctx.now)
+    server = server_of(panes)
+    gone = reconcile(records, panes, server, lambda path: Path(path).exists(), ctx.now)
     closed = ctx.store.close(gone, ctx.now, {card_id: records[card_id].rev for card_id in gone})
+    ctx.store.remember_pane_groups(pane_groups(records, panes, server))
     ctx.store.prune(ctx.now)
     if closed:
         print("closed: " + ", ".join(clean(card_id) for card_id in closed))

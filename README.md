@@ -143,7 +143,8 @@ sebside group set --id release-4.18 --title "Release 4.18: payments and login" -
 - `card set` stores the group of its pane in the card file, so a closed card stays in its group; `--group ID` stores
   another one and `--group ""` clears it. Without `--group` a stored group stays as it is (outside tmux too, and in a
   pane of another group or of none); only a card without one takes its pane's group. A card without a stored group
-  follows its pane's group.
+  follows its pane's group, and once closed stays in the group its pane had when a sidebar or `sebside reconcile`
+  last saw it (field `pane_group`).
 - `sebside group set` writes `groups/<id>.json` in the state directory (atomic, mode 0600). A grouped sidebar draws the
   title in its footer, above the usage meter, word-wrapped over up to `group_lines` lines (3 by default; a longer
   title ends with `…`), and the note dimmed on one line below. A change shows up at once. Without the file, or in a

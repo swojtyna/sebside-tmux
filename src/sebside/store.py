@@ -6,7 +6,7 @@
   each other's changes.
 - The directory is 0700 and files 0600; files are opened with `O_NOFOLLOW` and skipped unless owned by us.
 - `"schema": 1` per card. Unknown fields are ignored; a file with a newer schema is shown but never rewritten. Fields
-  added later (such as `group`) are optional: a file without them reads with their default.
+  added later (such as `group` and `pane_group`) are optional: a file without them reads with their default.
 - Beside the cards: `meter.json` (the usage meter) and `groups/<group id>.json` (the footer of one group's sidebars),
   written the same atomic, private way.
 """
@@ -73,6 +73,7 @@ def to_dict(record: CardRecord) -> dict[str, Any]:
         "closed_at": record.closed_at,
         "seen_rev": record.seen_rev,
         "group": record.group,
+        "pane_group": record.pane_group,
     }
 
 
@@ -126,7 +127,7 @@ def from_dict(data: Mapping[str, Any]) -> CardRecord | None:
     raw_resume = data.get("resume", [])
     resume = tuple(raw_resume) if isinstance(raw_resume, list) and all(isinstance(a, str) for a in raw_resume) else ()
     closed = data.get("closed_at")
-    group = _str(data, "group")
+    group, pane_group = _str(data, "group"), _str(data, "pane_group")
     return CardRecord(
         id=card_id,
         state=state,
@@ -143,6 +144,7 @@ def from_dict(data: Mapping[str, Any]) -> CardRecord | None:
         closed_at=_finite(closed),
         seen_rev=int(_num(data, "seen_rev")),
         group=group if valid_group(group) else "",
+        pane_group=pane_group if valid_group(pane_group) else "",
         schema=schema,
         readonly=schema > SCHEMA,
     )
@@ -441,9 +443,16 @@ class Store:
                 self.path(card_id).unlink()
         return True, ""
 
-    def close(self, card_ids: list[str], now: float, expected: Mapping[str, int] | None = None) -> list[str]:
+    def close(
+        self,
+        card_ids: list[str],
+        now: float,
+        expected: Mapping[str, int] | None = None,
+        pane_groups: Mapping[str, str] | None = None,
+    ) -> list[str]:
         """Mark open cards closed. Readonly cards are left alone. With `expected` (id -> rev seen when the decision
-        was made), a card that `card set` changed in the meantime is not closed."""
+        was made), a card that `card set` changed in the meantime is not closed. `pane_groups` (id -> group of the
+        card's pane, for a pane that is still there) replaces the remembered `pane_group`."""
         closed: list[str] = []
         if not card_ids:
             return closed
@@ -454,7 +463,8 @@ class Store:
                     continue
                 if expected is not None and card_id in expected and record.rev != expected[card_id]:
                     continue
-                self.write(replace(record, closed_at=now))
+                pane_group = (pane_groups or {}).get(card_id, record.pane_group)
+                self.write(replace(record, closed_at=now, pane_group=pane_group))
                 closed.append(card_id)
         return closed
 
@@ -466,6 +476,16 @@ class Store:
                 record = self.load(card_id)
                 if record is not None and not record.readonly and record.seen_rev < rev:
                     self.write(replace(record, seen_rev=rev))
+
+    def remember_pane_groups(self, pane_groups: Mapping[str, str]) -> None:
+        """Remember the group of each open card's pane (id -> group), so the card stays in it once closed."""
+        if not pane_groups:
+            return
+        with self.locked():
+            for card_id, group in pane_groups.items():
+                record = self.load(card_id)
+                if record is not None and not record.closed and not record.readonly and record.pane_group != group:
+                    self.write(replace(record, pane_group=group))
 
     def prune(self, now: float, keep: int = KEEP_CLOSED, days: float = KEEP_CLOSED_DAYS) -> list[str]:
         """Delete closed cards beyond the newest `keep` or older than `days`."""

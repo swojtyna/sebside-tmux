@@ -71,5 +71,7 @@ Where the code deliberately differs from, or narrows, the rules above:
 - Rule 2 (groups): `@sebside_group` is the one option sebside reads but never writes. You or an integration set it
   (usually on a session); `list-panes -a -F` resolves it per pane through window, session and global options. Its
   value is an id (`[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}`), never free text, and an invalid value counts as no group. The
-  group's text lives in `groups/<id>.json`, not in tmux. Cards keep `schema: 1`; `group` is an optional field.
+  group's text lives in `groups/<id>.json`, not in tmux. Cards keep `schema: 1`; `group` and `pane_group` are optional
+  fields. `pane_group` is the group of the card's pane when the sidebar or `reconcile` last saw it (written only when
+  it changes, for cards without a group of their own), so a closed card stays in the group its pane last had.
 - Rule 17 (groups): the frame-tick check covers the mtime of `groups/` as well, so a `group set` shows at once.

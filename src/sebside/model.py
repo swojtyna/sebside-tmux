@@ -95,12 +95,18 @@ class CardRecord:
     closed_at: float | None = None
     seen_rev: int = 0  # the done rev the user has looked at
     group: str = ""  # the group it belongs to; "" follows its pane's group (and none outside tmux)
+    pane_group: str = ""  # its pane's group when last seen, kept so a closed card without a group stays in that one
     schema: int = SCHEMA
     readonly: bool = False  # written by a newer sebside: shown, never rewritten
 
     @property
     def closed(self) -> bool:
         return self.closed_at is not None
+
+    @property
+    def last_group(self) -> str:
+        """Its own group, else the group its pane had when last seen (the group a closed card is shown in)."""
+        return self.group or self.pane_group
 
 
 @dataclass(frozen=True, slots=True)

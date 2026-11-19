@@ -12,9 +12,10 @@ Rules:
 - A card is stale (shown as unknown) when max(card updated_at, pane activity) is older than `stale_hours`.
 - A done card the user has looked at (`seen_rev` >= rev) is shown as quiet.
 - Closed cards: newest first, at most `history`, never one whose id is live.
-- Groups: a card's group is the one stored in its file; a card without one follows its pane's `@sebside_group`. A
-  default card has its pane's group. With a group (the sidebar's own session has one), only the cards of that group
-  are shown, live and closed; without one, every card is shown.
+- Groups: a card's group is the one stored in its file; a card without one follows its pane's `@sebside_group`, and
+  once closed stays in the group its pane had when last seen (`pane_group`, see `pane_groups`). A default card has
+  its pane's group. With a group (the sidebar's own session has one), only the cards of that group are shown, live
+  and closed; without one, every card is shown.
 """
 
 from __future__ import annotations
@@ -88,6 +89,20 @@ def reconcile(
         elif not socket_exists(ref.socket):
             gone.append(record.id)
     return gone
+
+
+def pane_groups(records: Mapping[str, CardRecord], panes: Iterable[Pane], server: Server | None) -> dict[str, str]:
+    """Open cards without a group of their own whose live pane is in another group than the one remembered: id ->
+    the pane's group now. Remembering it keeps the card in that group's history after its pane is gone."""
+    by_id = {pane.pane_id: pane for pane in panes}
+    out: dict[str, str] = {}
+    for record in records.values():
+        if record.closed or record.readonly or record.group:
+            continue
+        pane = live_pane(record, by_id, server)
+        if pane is not None and pane.group != record.pane_group:
+            out[record.id] = pane.group
+    return out
 
 
 def newly_seen(records: Mapping[str, CardRecord], panes: Iterable[Pane], server: Server | None) -> dict[str, int]:
@@ -199,7 +214,7 @@ def history_card(record: CardRecord, home: str) -> Card:
         since=record.closed_at,
         rev=record.rev,
         live=False,
-        group=record.group,
+        group=record.last_group,
         sources={
             "state": "card file: last state before the card closed",
             "age": "card file: time the card closed",
@@ -266,7 +281,7 @@ def build(
             live.append(default_card(chosen, config, now, home))
     live.sort(key=lambda card: sort_key(card, config.sort))
     closed = sorted(
-        (r for r in records.values() if r.closed and r.id not in live_ids and (not group or r.group == group)),
+        (r for r in records.values() if r.closed and r.id not in live_ids and (not group or r.last_group == group)),
         key=lambda r: r.closed_at or 0.0,
         reverse=True,
     )

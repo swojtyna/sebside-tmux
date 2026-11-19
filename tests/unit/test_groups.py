@@ -10,7 +10,7 @@ import pytest
 
 from fakes import NOW, SERVER_PID, SOCKET, FakePane, FakeTmuxServer, pane, record
 from sebside import cli
-from sebside.cards import Board, build
+from sebside.cards import Board, build, pane_groups, server_of
 from sebside.config import Config
 from sebside.errors import EXIT_USAGE, StateError
 from sebside.model import OPTION_GROUP, OPTION_ID, CardRecord, Group, Meter, State, valid_group
@@ -105,6 +105,31 @@ def test_history_limit_applies_within_the_group():
     assert [card.card_id for card in board.history] == ["g0", "g1"]
 
 
+def test_closed_card_without_its_own_group_stays_in_its_pane_group():
+    records = {
+        "a": record("a", pane_id=None, closed_at=NOW - 10, pane_group="g1"),
+        "b": record("b", pane_id=None, closed_at=NOW - 20, group="g2", pane_group="g1"),
+    }
+    assert [card.card_id for card in build([], records, Config(), NOW, group="g1").history] == ["a"]
+    assert [card.card_id for card in build([], records, Config(), NOW, group="g2").history] == ["b"]
+    assert [card.group for card in build([], records, Config(), NOW).history] == ["g1", "g2"]
+
+
+def test_pane_groups_lists_only_open_cards_without_a_group_whose_pane_group_changed():
+    panes = [pane(f"%{i}", f"s{i}", card_id=c, group="g1") for i, c in enumerate("abcde", 1)]
+    records = {
+        "a": record("a", pane_id="%1"),
+        "b": record("b", pane_id="%2", pane_group="g1"),
+        "c": record("c", pane_id="%3", group="g2"),
+        "d": record("d", pane_id="%4", closed_at=NOW),
+        "e": record("e", pane_id="%5", pane_group="g2"),
+        "f": record("f", pane_id="%6", pane_group="g1"),
+    }
+    assert pane_groups(records, panes, server_of(panes)) == {"a": "g1", "e": "g1"}
+    ungrouped = [pane("%1", "s1", card_id="a")]
+    assert pane_groups({"a": record("a", pane_id="%1", pane_group="g1")}, ungrouped, server_of(ungrouped)) == {"a": ""}
+
+
 # store --------------------------------------------------------------------------------------------
 def test_old_card_file_without_group_reads_and_round_trips():
     old = {"schema": 1, "id": "a", "state": "working", "title": "T", "rev": 2}
@@ -112,13 +137,16 @@ def test_old_card_file_without_group_reads_and_round_trips():
     assert loaded is not None and loaded.group == "" and loaded.title == "T"
     assert to_dict(loaded)["group"] == ""
     assert from_dict(to_dict(CardRecord("a", group="g1"))) == CardRecord("a", group="g1")
+    assert loaded.pane_group == "" and to_dict(loaded)["pane_group"] == ""
+    assert from_dict(to_dict(CardRecord("a", pane_group="g1"))) == CardRecord("a", pane_group="g1")
 
 
 def test_invalid_group_in_a_card_file_is_ignored(store):
     store.ensure_dir()
-    store.path("a").write_text(json.dumps({"schema": 1, "id": "a", "state": "working", "group": "../x"}))
+    data = {"schema": 1, "id": "a", "state": "working", "group": "../x", "pane_group": "a b"}
+    store.path("a").write_text(json.dumps(data))
     loaded = store.load("a")
-    assert loaded is not None and loaded.group == ""
+    assert loaded is not None and loaded.group == "" and loaded.pane_group == ""
 
 
 # cli ----------------------------------------------------------------------------------------------
@@ -206,6 +234,31 @@ def test_card_list_shows_the_group_and_filters_by_it(fake, in_tmux, capsys):
     assert cli.main(["card", "list", "--group", "a b"], in_tmux) == EXIT_USAGE
 
 
+def test_reconcile_keeps_a_card_in_the_group_its_session_got_after_card_set(fake, env, capsys, monkeypatch):
+    other = {**env, "TMUX": f"{SOCKET},{SERVER_PID},0", "TMUX_PANE": "%5"}
+    cli.main(["card", "set", "--id", "late", "--state", "working"], other)
+    assert Store.from_env(env).load("late").group == ""
+    fake.pane("%5").options[OPTION_GROUP] = "g1"  # the session gets a group after the card was set
+    monkeypatch.setattr(cli.time, "time", lambda: 9_999_999_999.0)
+    cli.main(["reconcile"], other)  # the pane is still there: its group is remembered
+    fake.panes.remove(fake.pane("%5"))
+    cli.main(["reconcile"], other)  # the pane is gone: the card closes
+    closed = Store.from_env(env).load("late")
+    assert closed is not None and closed.closed and closed.group == "" and closed.pane_group == "g1"
+    capsys.readouterr()
+    cli.main(["card", "list", "--group", "g1"], env)
+    assert [card["card_id"] for card in json.loads(capsys.readouterr().out)["history"]] == ["late"]
+
+
+def test_card_clear_in_its_pane_keeps_the_pane_group(fake, env):
+    other = {**env, "TMUX": f"{SOCKET},{SERVER_PID},0", "TMUX_PANE": "%5"}
+    cli.main(["card", "set", "--id", "late", "--state", "working"], other)
+    fake.pane("%5").options[OPTION_GROUP] = "g1"
+    cli.main(["card", "clear"], other)
+    closed = Store.from_env(env).load("late")
+    assert closed is not None and closed.closed and closed.last_group == "g1"
+
+
 # sidebar ------------------------------------------------------------------------------------------
 def test_sidebar_in_a_grouped_session_shows_only_its_group(server, tmux, store):
     server.panes += [
@@ -221,6 +274,39 @@ def test_sidebar_in_a_grouped_session_shows_only_its_group(server, tmux, store):
     app.own_pane = "%2"
     app.refresh()
     assert [card.title for card in app.board.live] == ["b"]
+
+
+def _closing_app(server, tmux, store, session_group: str) -> App:
+    """A sidebar in g1 (own pane %9) and card x on %1 in session a, set while a had no group."""
+    server.panes += [
+        FakePane("%1", "a", options={OPTION_ID: "x"}),
+        FakePane("%9", "side", options={OPTION_GROUP: "g1"}),
+    ]
+    store.write(record("x", pane_id="%1", title="mine"))
+    app = App(Config(), tmux, store, clock=lambda: NOW, socket_exists=lambda p: True, own_pane="%9")
+    app.refresh()
+    assert "x" not in [card.card_id for card in app.board.live]  # session a has no group yet: not in g1
+    if session_group:
+        server.pane("%1").options[OPTION_GROUP] = session_group
+    app.refresh()
+    server.panes.remove(server.pane("%1"))
+    app.refresh()
+    return app
+
+
+def test_card_closed_after_its_session_got_a_group_stays_in_that_group(server, tmux, store):
+    app = _closing_app(server, tmux, store, "g1")
+    closed = store.load("x")
+    assert closed is not None and closed.closed and closed.group == "" and closed.pane_group == "g1"
+    assert [card.card_id for card in app.board.history] == ["x"]
+
+
+def test_card_closed_in_a_session_without_a_group_has_no_group(server, tmux, store):
+    app = _closing_app(server, tmux, store, "")
+    closed = store.load("x")
+    assert closed is not None and closed.closed and closed.last_group == ""
+    assert app.board.history == []
+    assert [card.card_id for card in build([], store.load_all(), Config(), NOW).history] == ["x"]
 
 
 def test_sidebar_without_a_group_shows_every_session(server, tmux, store):

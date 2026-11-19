@@ -12,7 +12,9 @@ All notable changes to this project are documented here. The format follows
   `tmux set-option -t api @sebside_group release-4.18`; sebside never writes it) shows only that group's live,
   default and recently closed cards. Sidebars in sessions without the option show everything, as before. `card set`
   stores the pane's group in the card file (optional field `group`, files without it still read) unless the card
-  already has one, or takes `--group ID` (`""` clears it); `card list` prints each card's `group` and filters with `--group ID`.
+  already has one, or takes `--group ID` (`""` clears it). A card without a group of its own follows its pane's group
+  and, once closed, stays in the group its pane last had (optional field `pane_group`). `card list` prints each
+  card's `group` and filters with `--group ID`.
 - `sebside group set --id ID --title TEXT [--note TEXT]` / `sebside group clear --id ID`: a footer for one group's
   sidebars, above the usage meter: the title word-wrapped over up to `group_lines` lines (new config key, default 3,
   also `SEBSIDE_GROUP_LINES`), the note dimmed below. Stored in `groups/<id>.json` (atomic, 0600); a change shows at once.
