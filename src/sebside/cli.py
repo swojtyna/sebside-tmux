@@ -87,6 +87,15 @@ def _parser() -> argparse.ArgumentParser:
     set_.add_argument("--pane", help="target pane id (default: $TMUX_PANE)")
     set_.add_argument("--group", help='group id (default: the pane\'s @sebside_group; "" for none)')
 
+    update = card.add_parser(
+        "update", parents=[common], help="change text of an existing card; state, pane and age stay as they are"
+    )
+    update.add_argument("--id", required=True, help="id of an existing card")
+    update.add_argument("--title", help="first line")
+    update.add_argument("--subtitle", help="second line")
+    update.add_argument("--desc", help="third line")
+    update.add_argument("--extra", help="short text on the right of the second line")
+
     clear = card.add_parser("clear", parents=[common], help="close a card (it stays in history unless --forget)")
     clear.add_argument("--id", help="card id (default: the card on $TMUX_PANE)")
     clear.add_argument("--pane", help="target pane id (default: $TMUX_PANE)")
@@ -204,10 +213,15 @@ def _group_arg(value: str | None, *, empty: bool = False) -> str | None:
     return value
 
 
-def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
-    card_id = args.id.strip()
+def _card_id(value: str) -> str:
+    card_id = value.strip()
     if not card_id or _one_line(card_id, MAX_TEXT) != card_id:
         raise UsageError(f"--id must be a non-empty single line of at most {MAX_TEXT} characters")
+    return card_id
+
+
+def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
+    card_id = _card_id(args.id)
     try:
         state = parse_state(args.state)
     except ValueError as error:
@@ -255,6 +269,29 @@ def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
         raise StateError(f"card {card_id!r} was not written: check {ctx.store.cards_dir}")
     where = f"pane {record.tmux.pane}" if record.tmux else "outside tmux"
     print(f"card {clean(record.id)}: {record.state.value} (rev {record.rev}, {where})")
+    return EXIT_OK
+
+
+def run_card_update(ctx: Context, args: argparse.Namespace) -> int:
+    """Only the given text fields change: never the state, the pane, the revision, the age or any tmux option, so a
+    done card you have seen stays seen and a card stays on its pane. tmux is not called."""
+    card_id = _card_id(args.id)
+    text = _text_fields(args)
+    if not text:
+        raise UsageError("nothing to update: pass --title, --subtitle, --desc or --extra")
+
+    def change(current: CardRecord | None) -> CardRecord:
+        if current is None:
+            raise UsageError(f"no card {card_id!r}: create it with sebside card set --id ... --state ...")
+        if current.readonly:
+            raise StateError(f"card {card_id!r} was written by a newer sebside: upgrade sebside")
+        fields: dict[str, Any] = dict(text)
+        return replace(current, **fields)
+
+    record = ctx.store.update(card_id, change)
+    if record is None:
+        raise StateError(f"card {card_id!r} was not written: check {ctx.store.cards_dir}")
+    print(f"card {clean(record.id)}: updated {', '.join(text)} (rev {record.rev})")
     return EXIT_OK
 
 
@@ -476,6 +513,7 @@ COMMANDS: dict[str, Command] = {
     "group clear": run_group_clear,
     "sidebar": run_sidebar,
     "card set": run_card_set,
+    "card update": run_card_update,
     "card clear": run_card_clear,
     "card list": run_card_list,
     "reconcile": run_reconcile,

@@ -104,6 +104,19 @@ def test_card_set_end_to_end(server: Server, tmp_path: Path):
     assert "beta" in titles
 
 
+def test_card_update_changes_text_only(server: Server, tmp_path: Path):
+    pane = server.tmux("display-message", "-p", "-t", "=alpha:", "#{pane_id}")
+    assert cli.main(["card", "set", "--id", "job", "--state", "done"], env_for(server, tmp_path, pane)) == 0
+    before = Store.from_env(env_for(server, tmp_path)).load("job")
+    assert cli.main(["card", "update", "--id", "job", "--subtitle", "ctx 40%"], env_for(server, tmp_path)) == 0
+    after = Store.from_env(env_for(server, tmp_path)).load("job")
+    assert before is not None and after is not None and after.subtitle == "ctx 40%"
+    assert after.state is State.DONE
+    assert (after.tmux, after.rev, after.updated_at) == (before.tmux, before.rev, before.updated_at)
+    assert server.tmux("show-options", "-pqv", "-t", pane, OPTION_ID) == "job"
+    assert server.tmux("show-options", "-pqv", "-t", pane, OPTION_STATE) == "done"
+
+
 def test_closed_session_is_reconciled_into_history(server: Server, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     pane = server.tmux("display-message", "-p", "-t", "=beta:", "#{pane_id}")
     env = env_for(server, tmp_path, pane)
