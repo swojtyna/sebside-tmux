@@ -468,3 +468,21 @@ def test_real_sidebars_show_their_group_and_footer(server: Server, tmp_path: Pat
     assert "Backend team" not in gamma and "gone-1" in gamma and "alpha" in gamma
     assert cli.main(["group", "set", "--id", "g1", "--title", "Renamed"], env) == 0
     assert wait_for(lambda: "Renamed" in sidebar_text(server, windows["alpha"]))  # the dir stamp
+
+
+def test_real_sidebar_redraws_after_card_update(server: Server, tmp_path: Path):
+    pane = server.tmux("display-message", "-p", "-t", "=alpha:", "#{pane_id}")
+    set_ = ["card", "set", "--id", "job", "--state", "working", "--title", "Deploy"]
+    assert cli.main(set_, env_for(server, tmp_path, pane)) == 0
+    env = env_for(server, tmp_path)
+    bin_dir = str(Path(shutil.which("sebside") or REPO / ".venv" / "bin" / "sebside").parent)
+    env |= {"PATH": f"{bin_dir}:{env['PATH']}", "SEBSIDE_BIN": f"{bin_dir}/sebside"}
+    for name in ("XDG_STATE_HOME", "XDG_CONFIG_HOME"):
+        server.tmux("set-environment", "-g", name, env[name])  # the sidebar process reads the same state
+    window = server.tmux("display-message", "-p", "-t", "=alpha:", "#{window_id}")
+    assert cli.main(["open", "--target", window], env) == 0
+    assert wait_for(lambda: "Deploy" in sidebar_text(server, window))
+    assert "step 3 of 5" not in sidebar_text(server, window)
+    assert cli.main(["card", "update", "--id", "job", "--subtitle", "step 3 of 5"], env) == 0
+    assert wait_for(lambda: "step 3 of 5" in sidebar_text(server, window))
+    assert "Deploy" in sidebar_text(server, window)
