@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Groups: a sidebar in a session whose `@sebside_group` is set (by you or an integration, e.g.
+  `tmux set-option -t api @sebside_group backend`; sebside never writes it) shows only that group's live,
+  default and recently closed cards. Sidebars in sessions without the option show everything, as before. `card set`
+  stores the pane's group in the card file (optional field `group`, files without it still read) unless the card
+  already has one, or takes `--group ID` (`""` clears it). A card without a group of its own follows its pane's group
+  and, once closed, stays in the group its pane last had (optional field `pane_group`). `card list` prints each
+  card's `group` and filters with `--group ID`.
+- `sebside group set --id ID --title TEXT [--note TEXT]` / `sebside group clear --id ID`: a footer for one group's
+  sidebars, above the usage meter: the title word-wrapped over up to `group_lines` lines (new config key, default 3,
+  also `SEBSIDE_GROUP_LINES`), the note dimmed below. Stored in `groups/<id>.json` (atomic, 0600; a hashed name for an
+  id with upper-case letters, so ids that differ only in case never share a file); a change shows at once.
+- `sebside card update --id ID [--title] [--subtitle] [--desc] [--extra]`: changes only the given text of an existing
+  card. State, pane, revision, age, seen mark and tmux options stay as they are, and tmux is not called. A missing
+  card is a usage error (exit 2).
 - One sidebar width everywhere: resizing one sidebar resizes the others (and new ones open at that width),
   kept in the global option `@sebside_shared_width`.
 - `sebside meter set --label L --percent N [--note TEXT]` / `sebside meter clear`: one usage meter under the

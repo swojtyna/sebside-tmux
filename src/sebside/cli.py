@@ -1,5 +1,6 @@
-"""Command line: `sebside` (the sidebar), `sebside card ...`, `sebside reconcile`, `sebside config ...`,
-`sebside uninstall`. Every command is `run_<name>(ctx, args) -> int`; errors map to exit codes (see errors.py)."""
+"""Command line: `sebside` (the sidebar), `sebside card ...`, `sebside meter ...`, `sebside group ...`,
+`sebside reconcile`, `sebside config ...`, `sebside uninstall`. Every command is `run_<name>(ctx, args) -> int`;
+errors map to exit codes (see errors.py)."""
 
 from __future__ import annotations
 
@@ -17,20 +18,23 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .cards import build, reconcile, server_of
+from .cards import build, pane_groups, reconcile, server_of
 from .config import SORTS, Config, config_path, load_from_env
 from .errors import EXIT_OK, SebsideError, StateError, TmuxError, UsageError
 from .log import logger, setup
 from .model import (
+    OPTION_GROUP,
     OPTION_ID,
     OPTION_ROLE,
     OPTION_STATE,
     SIDEBAR_ROLE,
     CardRecord,
+    Group,
     Meter,
     State,
     TmuxRef,
     parse_state,
+    valid_group,
 )
 from .render import clean
 from .store import Store
@@ -81,13 +85,26 @@ def _parser() -> argparse.ArgumentParser:
     set_.add_argument("--resume", help="command that brings the card back, split into words, run without a shell")
     set_.add_argument("--cwd", help="directory for resume (default: current directory)")
     set_.add_argument("--pane", help="target pane id (default: $TMUX_PANE)")
+    set_.add_argument(
+        "--group", help='group id (default: the stored group, else the pane\'s @sebside_group; "" clears it)'
+    )
+
+    update = card.add_parser(
+        "update", parents=[common], help="change text of an existing card; state, pane and age stay as they are"
+    )
+    update.add_argument("--id", required=True, help="id of an existing card")
+    update.add_argument("--title", help="first line")
+    update.add_argument("--subtitle", help="second line")
+    update.add_argument("--desc", help="third line")
+    update.add_argument("--extra", help="short text on the right of the second line")
 
     clear = card.add_parser("clear", parents=[common], help="close a card (it stays in history unless --forget)")
     clear.add_argument("--id", help="card id (default: the card on $TMUX_PANE)")
     clear.add_argument("--pane", help="target pane id (default: $TMUX_PANE)")
     clear.add_argument("--forget", action="store_true", help="delete the card file too")
 
-    card.add_parser("list", parents=[common], help="print live and recently closed cards as JSON")
+    list_ = card.add_parser("list", parents=[common], help="print live and recently closed cards as JSON")
+    list_.add_argument("--group", help="only the cards of this group, as a sidebar in that group shows them")
 
     meter = commands.add_parser("meter", help="set or clear the usage meter under the counter").add_subparsers(
         dest="meter", required=True
@@ -97,6 +114,16 @@ def _parser() -> argparse.ArgumentParser:
     meter_set.add_argument("--percent", required=True, type=int, help="0..100")
     meter_set.add_argument("--note", default="", help="second line, e.g. when the limit resets")
     meter.add_parser("clear", parents=[common], help="remove the meter")
+
+    group = commands.add_parser("group", help="set or clear the footer of a group's sidebars").add_subparsers(
+        dest="group", required=True
+    )
+    group_set = group.add_parser("set", parents=[common], help="show a title and a note above the meter")
+    group_set.add_argument("--id", required=True, help="group id, the value of @sebside_group")
+    group_set.add_argument("--title", required=True, help="wrapped over up to group_lines lines")
+    group_set.add_argument("--note", default="", help="one dimmed line under the title")
+    group_clear = group.add_parser("clear", parents=[common], help="remove the group's footer")
+    group_clear.add_argument("--id", required=True, help="group id")
 
     commands.add_parser(
         "reconcile", parents=[common], help="close cards whose pane is gone (the session-closed hook calls this)"
@@ -156,6 +183,7 @@ class Target:
     tmux: Tmux
     ref: TmuxRef
     previous_id: str
+    group: str = ""  # the pane's @sebside_group as tmux resolves it ("" when unset or not a valid id)
 
 
 def _target(args: argparse.Namespace, env: Mapping[str, str]) -> Target | None:
@@ -167,20 +195,35 @@ def _target(args: argparse.Namespace, env: Mapping[str, str]) -> Target | None:
     if socket is None:
         raise UsageError("--pane needs a tmux server: pass --socket or run inside tmux")
     tmux = _tmux(args, env)
-    fmt = FIELD_SEP.join([format_field("pid"), format_field("socket_path"), format_field(OPTION_ID), "#{pane_id}"])
-    done = tmux.display(pane, fmt)
+    names = ("pid", "socket_path", OPTION_ID, "pane_id", OPTION_GROUP)
+    done = tmux.display(pane, FIELD_SEP.join(format_field(name) for name in names))
     if not done.ok:
         raise TmuxError(f"cannot read pane {pane}: {done.error}")
     values = done.stdout.rstrip("\n").split(FIELD_SEP)
-    if len(values) != 4 or not values[0].isdigit() or not PANE_ID.match(values[3]):
+    if len(values) != len(names) or not values[0].isdigit() or not PANE_ID.match(values[3]):
         raise TmuxError(f"unexpected tmux answer for pane {pane}: is it tmux 3.0 or newer?")
-    return Target(tmux, TmuxRef(values[1], int(values[0]), values[3]), values[2])
+    group = values[4] if valid_group(values[4]) else ""
+    return Target(tmux, TmuxRef(values[1], int(values[0]), values[3]), values[2], group)
+
+
+def _group_arg(value: str | None, *, empty: bool = False) -> str | None:
+    """A --group value: None when not given; "" (no group) only where `empty` allows it."""
+    if value is None or (empty and value == ""):
+        return value
+    if not valid_group(value):
+        raise UsageError(f"--group {value!r} is not a group id: 1..100 letters, digits, '.', '_' or '-'")
+    return value
+
+
+def _card_id(value: str) -> str:
+    card_id = value.strip()
+    if not card_id or _one_line(card_id, MAX_TEXT) != card_id:
+        raise UsageError(f"--id must be a non-empty single line of at most {MAX_TEXT} characters")
+    return card_id
 
 
 def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
-    card_id = args.id.strip()
-    if not card_id or _one_line(card_id, MAX_TEXT) != card_id:
-        raise UsageError(f"--id must be a non-empty single line of at most {MAX_TEXT} characters")
+    card_id = _card_id(args.id)
     try:
         state = parse_state(args.state)
     except ValueError as error:
@@ -191,10 +234,8 @@ def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
         raise UsageError(f"--resume: {error}") from None
     if resume is not None and not all(_utf8(word) and word.isprintable() for word in resume):
         raise UsageError("--resume must be printable UTF-8 text")
-    fields = (("title", args.title), ("subtitle", args.subtitle), ("desc", args.desc), ("extra", args.extra))
-    text = {
-        name: _one_line(value, MAX_DESC if name == "desc" else MAX_TEXT) for name, value in fields if value is not None
-    }
+    group = _group_arg(args.group, empty=True)
+    text = _text_fields(args)
     target = _target(args, ctx.env)
     if target is not None:
         if target.previous_id and target.previous_id != card_id:
@@ -210,6 +251,11 @@ def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
         updates: dict[str, Any] = dict(text)
         if resume is not None:
             updates["resume"] = resume
+        if group is not None:
+            updates["group"] = group
+        elif not record.group and target is not None:
+            updates["group"] = target.group  # without --group a stored group stays; with none stored, the pane's
+        updates["pane_group"] = target.group if target else ""
         return replace(
             record,
             **updates,
@@ -227,6 +273,37 @@ def run_card_set(ctx: Context, args: argparse.Namespace) -> int:
     where = f"pane {record.tmux.pane}" if record.tmux else "outside tmux"
     print(f"card {clean(record.id)}: {record.state.value} (rev {record.rev}, {where})")
     return EXIT_OK
+
+
+def run_card_update(ctx: Context, args: argparse.Namespace) -> int:
+    """Only the given text fields change: never the state, the pane, the revision, the age or any tmux option, so a
+    done card you have seen stays seen and a card stays on its pane. tmux is not called."""
+    card_id = _card_id(args.id)
+    text = _text_fields(args)
+    if not text:
+        raise UsageError("nothing to update: pass --title, --subtitle, --desc or --extra")
+
+    def change(current: CardRecord | None) -> CardRecord:
+        if current is None:
+            raise UsageError(f"no card {card_id!r}: create it with sebside card set --id ... --state ...")
+        if current.readonly:
+            raise StateError(f"card {card_id!r} was written by a newer sebside: upgrade sebside")
+        fields: dict[str, Any] = dict(text)
+        return replace(current, **fields)
+
+    record = ctx.store.update(card_id, change)
+    if record is None:
+        raise StateError(f"card {card_id!r} was not written: check {ctx.store.cards_dir}")
+    print(f"card {clean(record.id)}: updated {', '.join(text)} (rev {record.rev})")
+    return EXIT_OK
+
+
+def _text_fields(args: argparse.Namespace) -> dict[str, str]:
+    """The text flags that were given, each made one clean line of at most its length."""
+    fields = (("title", args.title), ("subtitle", args.subtitle), ("desc", args.desc), ("extra", args.extra))
+    return {
+        name: _one_line(value, MAX_DESC if name == "desc" else MAX_TEXT) for name, value in fields if value is not None
+    }
 
 
 def _utf8(text: str) -> bool:
@@ -248,7 +325,7 @@ def _close_if_on(ctx: Context, target: Target) -> bool:
     previous = ctx.store.load(target.previous_id)
     if previous is None or previous.tmux != target.ref:
         return False
-    return bool(ctx.store.close([target.previous_id], ctx.now, {previous.id: previous.rev}))
+    return bool(ctx.store.close([previous.id], ctx.now, {previous.id: previous.rev}, {previous.id: target.group}))
 
 
 def _set_option(target: Target, name: str, value: str) -> None:
@@ -275,7 +352,9 @@ def run_card_clear(ctx: Context, args: argparse.Namespace) -> int:
             card_id = target.previous_id
     if not card_id:
         raise UsageError("no card to clear: pass --id, or run inside a pane that has a card")
-    done = ctx.store.delete(card_id) if args.forget else bool(ctx.store.close([card_id], ctx.now))
+    current = ctx.store.load(card_id) if target is not None else None
+    groups = {card_id: target.group} if target is not None and current and current.tmux == target.ref else None
+    done = ctx.store.delete(card_id) if args.forget else bool(ctx.store.close([card_id], ctx.now, None, groups))
     verb = "forgot" if args.forget else "closed"
     print(f"{verb} {clean(card_id)}" if done else f"{clean(card_id)}: nothing to do")
     return EXIT_OK
@@ -284,7 +363,8 @@ def run_card_clear(ctx: Context, args: argparse.Namespace) -> int:
 def run_card_list(ctx: Context, args: argparse.Namespace) -> int:
     config = _config(args, ctx.env)
     panes = _tmux(args, ctx.env).list_panes() if _socket(args, ctx.env) else []
-    board = build(panes or [], ctx.store.load_all(), config, ctx.now, ctx.env.get("HOME", ""))
+    group = _group_arg(args.group) or ""
+    board = build(panes or [], ctx.store.load_all(), config, ctx.now, ctx.env.get("HOME", ""), group)
     payload = {"live": [asdict(card) for card in board.live], "history": [asdict(card) for card in board.history]}
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return EXIT_OK
@@ -295,8 +375,10 @@ def run_reconcile(ctx: Context, args: argparse.Namespace) -> int:
     if panes is None:
         raise TmuxError("tmux did not answer: try again")
     records = ctx.store.load_all()
-    gone = reconcile(records, panes, server_of(panes), lambda path: Path(path).exists(), ctx.now)
+    server = server_of(panes)
+    gone = reconcile(records, panes, server, lambda path: Path(path).exists(), ctx.now)
     closed = ctx.store.close(gone, ctx.now, {card_id: records[card_id].rev for card_id in gone})
+    ctx.store.remember_pane_groups(pane_groups(records, panes, server))
     ctx.store.prune(ctx.now)
     if closed:
         print("closed: " + ", ".join(clean(card_id) for card_id in closed))
@@ -411,11 +493,34 @@ def run_meter_clear(ctx: Context, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _group_id(value: str) -> str:
+    if not valid_group(value):
+        raise UsageError(f"--id {value!r} is not a group id: 1..100 letters, digits, '.', '_' or '-'")
+    return value
+
+
+def run_group_set(ctx: Context, args: argparse.Namespace) -> int:
+    group_id = _group_id(args.id)
+    title = _one_line(args.title, MAX_TEXT)
+    if not title:
+        raise UsageError("--title must not be empty")
+    ctx.store.write_group(Group(group_id, title, _one_line(args.note, MAX_TEXT), ctx.now))
+    return EXIT_OK
+
+
+def run_group_clear(ctx: Context, args: argparse.Namespace) -> int:
+    ctx.store.clear_group(_group_id(args.id))
+    return EXIT_OK
+
+
 COMMANDS: dict[str, Command] = {
     "meter set": run_meter_set,
     "meter clear": run_meter_clear,
+    "group set": run_group_set,
+    "group clear": run_group_clear,
     "sidebar": run_sidebar,
     "card set": run_card_set,
+    "card update": run_card_update,
     "card clear": run_card_clear,
     "card list": run_card_list,
     "reconcile": run_reconcile,
@@ -437,6 +542,8 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
         name = f"card {args.card}"
     if name == "meter":
         name = f"meter {args.meter}"
+    if name == "group":
+        name = f"group {args.group}"
     try:
         setup(debug, store.root)
         return COMMANDS[name](ctx, args)

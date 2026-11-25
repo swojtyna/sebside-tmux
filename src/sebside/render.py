@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .config import ANSI_NAMES, HEX, Config
-from .model import Card, Meter, State
+from .model import Card, Group, Meter, State
 
 if TYPE_CHECKING:
     from .cards import Board
@@ -263,6 +263,22 @@ def meter_rows(meter: Meter | None, width: int, config: Config, now: float) -> l
     return rows
 
 
+def group_rows(group: Group | None, width: int, config: Config) -> list[Row]:
+    """The group's title, word-wrapped to at most `group_lines` lines (the last one ends with … when the title is
+    longer), and its note dimmed on one line below. Nothing without a group."""
+    if group is None:
+        return []
+    text = config.colors["text"]
+    room = max(width - 1, 1)
+    lines = chunks(" ".join(clean(group.title).split()), room)
+    if len(lines) > config.group_lines:
+        lines = [*lines[: config.group_lines - 1], clip(" ".join(lines[config.group_lines - 1 :]), room)]
+    rows = [line(width, [(piece, Style(text, bold=True))], margin=False) for piece in lines]
+    if group.note:
+        rows.append(line(width, [(clip(group.note, room), Style(text, dim=True))], margin=False))
+    return rows
+
+
 def hint_rows(width: int, config: Config, prefix: str, mode: str) -> list[Row]:
     muted = Style(config.colors["text"], dim=True)
     key = prefix_label(prefix)
@@ -414,14 +430,16 @@ def frame_layout(
     resume_allowed: bool = False,
     current_session: str | None = None,
     meter: Meter | None = None,
+    group: Group | None = None,
 ) -> tuple[list[Row], list[str | None]]:
     """The whole screen and, per screen row, the card key under it (None for anything else). Cards are scrolled to
-    keep the selection visible, then come the counter and key hints."""
+    keep the selection visible, then come the counter, the group's footer, the meter and the key hints."""
     footer: list[Row] = []
     if message:
         footer.append(line(width, [(clip(message, width - 1), Style(config.colors["text"], bold=True))], margin=False))
     footer.append(line(width, []))
     footer.append(counter_row(board, width, config, frame))
+    footer += group_rows(group, width, config)
     footer += meter_rows(meter, width, config, now)
     footer += hint_rows(width, config, prefix, mode)
     room = max(height - len(footer), 0)
@@ -463,8 +481,10 @@ def frame_rows(
     resume_allowed: bool = False,
     current_session: str | None = None,
     meter: Meter | None = None,
+    group: Group | None = None,
 ) -> list[Row]:
-    """The whole screen: cards (scrolled to keep the selection visible), then the counter, meter and key hints."""
+    """The whole screen: cards (scrolled to keep the selection visible), then the counter, the group's footer, the
+    meter and the key hints."""
     return frame_layout(
         board,
         selected_key,
@@ -479,6 +499,7 @@ def frame_rows(
         resume_allowed=resume_allowed,
         current_session=current_session,
         meter=meter,
+        group=group,
     )[0]
 
 

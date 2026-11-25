@@ -82,6 +82,7 @@ class Config:
     filter: Filter = field(default_factory=Filter)
     show_age: bool = True  # the time on the right of each card; false hides it
     resume_programs: tuple[str, ...] = ()  # programs a closed card may be resumed with; empty = resume off
+    group_lines: int = 3  # lines for the group title in the footer of a grouped sidebar; longer titles end with …
 
     def may_resume(self, argv: tuple[str, ...]) -> bool:
         """Only argv whose program (as written, or its basename) is on the allowlist."""
@@ -168,6 +169,7 @@ def parse(data: Mapping[str, Any]) -> Config:
         filter=Filter(_patterns(raw_filter, "include", ("*",)), _patterns(raw_filter, "exclude", ())),
         resume_programs=_programs(data.get("resume_programs", [])),
         show_age=show_age,
+        group_lines=int(_number(data, "group_lines", 3, 1)),
     )
 
 
@@ -184,6 +186,7 @@ SCALARS: dict[str, type] = {
     "quiet_minutes": float,
     "refresh_seconds": float,
     "sort": str,
+    "group_lines": int,
 }
 
 

@@ -5,7 +5,10 @@
 - Read-modify-write and pruning hold `fcntl.flock` on `cards/.lock`, so the sidebar and `card set` never lose
   each other's changes.
 - The directory is 0700 and files 0600; files are opened with `O_NOFOLLOW` and skipped unless owned by us.
-- `"schema": 1` per card. Unknown fields are ignored; a file with a newer schema is shown but never rewritten.
+- `"schema": 1` per card. Unknown fields are ignored; a file with a newer schema is shown but never rewritten. Fields
+  added later (such as `group` and `pane_group`) are optional: a file without them reads with their default.
+- Beside the cards: `meter.json` (the usage meter) and `groups/<group id>.json` (the footer of one group's sidebars;
+  named like card files, with a hash for an id that has upper-case letters), written the same atomic, private way.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .errors import StateError
-from .model import SCHEMA, CardRecord, Meter, State, TmuxRef, parse_state
+from .model import SCHEMA, CardRecord, Group, Meter, State, TmuxRef, parse_state, valid_group
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -49,6 +52,14 @@ def file_name(card_id: str) -> str:
     return "id-" + hashlib.sha256(card_id.encode()).hexdigest()[:32] + ".json"
 
 
+def group_file_name(group_id: str) -> str:
+    """Like a card's: the id itself when it is lower case, otherwise a hash (the id is stored inside the file). Ids
+    that differ only in case, such as `Web` and `web`, so never share a file on a case-insensitive file system."""
+    if group_id == group_id.lower():
+        return f"{group_id}.json"
+    return "id-" + hashlib.sha256(group_id.encode()).hexdigest()[:32] + ".json"
+
+
 # (de)serialization: pure -------------------------------------------------------------------------
 def to_dict(record: CardRecord) -> dict[str, Any]:
     return {
@@ -69,6 +80,8 @@ def to_dict(record: CardRecord) -> dict[str, Any]:
         "updated_at": record.updated_at,
         "closed_at": record.closed_at,
         "seen_rev": record.seen_rev,
+        "group": record.group,
+        "pane_group": record.pane_group,
     }
 
 
@@ -122,6 +135,7 @@ def from_dict(data: Mapping[str, Any]) -> CardRecord | None:
     raw_resume = data.get("resume", [])
     resume = tuple(raw_resume) if isinstance(raw_resume, list) and all(isinstance(a, str) for a in raw_resume) else ()
     closed = data.get("closed_at")
+    group, pane_group = _str(data, "group"), _str(data, "pane_group")
     return CardRecord(
         id=card_id,
         state=state,
@@ -137,12 +151,27 @@ def from_dict(data: Mapping[str, Any]) -> CardRecord | None:
         updated_at=_num(data, "updated_at"),
         closed_at=_finite(closed),
         seen_rev=int(_num(data, "seen_rev")),
+        group=group if valid_group(group) else "",
+        pane_group=pane_group if valid_group(pane_group) else "",
         schema=schema,
         readonly=schema > SCHEMA,
     )
 
 
 # files -------------------------------------------------------------------------------------------
+def _private_dir(path: Path) -> None:
+    """Create `path` (0700) under an existing parent; refuse one that is not a directory owned by us."""
+    try:
+        path.mkdir(mode=0o700, exist_ok=True)
+    except OSError as error:
+        raise StateError(f"cannot create {path}: {error.strerror}") from None
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise StateError(f"{path} is not a directory owned by you: remove it and try again")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        path.chmod(0o700)
+
+
 @dataclass
 class Store:
     root: Path  # the sebside state directory
@@ -165,21 +194,19 @@ class Store:
             root = self.root.lstat()
             if root.st_uid == os.getuid() and stat.S_IMODE(root.st_mode) & 0o077:
                 self.root.chmod(0o700)
-            self.cards_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         except OSError as error:
             raise StateError(f"cannot create {self.cards_dir}: {error.strerror}") from None
-        info = self.cards_dir.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-            raise StateError(f"{self.cards_dir} is not a directory owned by you: remove it and try again")
-        if stat.S_IMODE(info.st_mode) & 0o077:
-            self.cards_dir.chmod(0o700)
+        _private_dir(self.cards_dir)
 
-    def dir_stamp(self) -> int:
-        """Changes whenever a card file is added, replaced or removed (cheap check before a reload)."""
-        try:
-            return self.cards_dir.stat().st_mtime_ns
-        except OSError:
-            return 0
+    def dir_stamp(self) -> tuple[int, int]:
+        """Changes whenever a card or group file is added, replaced or removed (cheap check before a reload)."""
+        stamps: list[int] = []
+        for directory in (self.cards_dir, self.groups_dir):
+            try:
+                stamps.append(directory.stat().st_mtime_ns)
+            except OSError:
+                stamps.append(0)
+        return stamps[0], stamps[1]
 
     def _read(self, path: Path, private: bool = False) -> tuple[CardRecord | None, str]:
         """Parse one card file from the descriptor that was checked (no symlinks, owned by us; with `private`
@@ -332,6 +359,69 @@ class Store:
             return None
         return Meter(label, max(0, min(100, percent)), note, float(at))
 
+    @property
+    def groups_dir(self) -> Path:
+        return self.root / "groups"
+
+    def group_path(self, group_id: str) -> Path:
+        if not valid_group(group_id):
+            raise StateError(f"{group_id!r} is not a group id: use letters, digits, '.', '_' and '-'")
+        return self.groups_dir / group_file_name(group_id)
+
+    def write_group(self, group: Group) -> None:
+        """Atomic write of one group's footer (temporary file + rename, 0600, directory 0700)."""
+        target = self.group_path(group.id)
+        self.ensure_dir()
+        _private_dir(self.groups_dir)
+        descriptor, temporary = tempfile.mkstemp(prefix=".group-", suffix=".tmp", dir=self.groups_dir)
+        try:
+            os.fchmod(descriptor, 0o600)
+            data = {"id": group.id, "title": group.title, "note": group.note, "at": group.at}
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False)
+            Path(temporary).replace(target)
+        except BaseException as error:
+            with contextlib.suppress(OSError):
+                Path(temporary).unlink()
+            if isinstance(error, OSError):
+                raise StateError(f"cannot write {target}: {error.strerror}") from None
+            if isinstance(error, UnicodeError | ValueError):
+                raise StateError(f"cannot write {target}: text is not valid UTF-8") from None
+            raise
+
+    def clear_group(self, group_id: str) -> bool:
+        try:
+            self.group_path(group_id).unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def load_group(self, group_id: str) -> Group | None:
+        """One group's footer; None when the id is not valid, or the file is missing, not a regular file owned by
+        us, not valid or written for another id."""
+        if not valid_group(group_id):
+            return None
+        try:
+            descriptor = os.open(self.group_path(group_id), os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError:
+            return None
+        try:
+            info = os.fstat(descriptor)
+            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+                return None
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                data = parse_json(handle.read(10_000))
+        finally:
+            os.close(descriptor)
+        if data is None or data.get("id") != group_id:
+            return None
+        title, note, at = data.get("title"), data.get("note", ""), data.get("at", 0)
+        if not isinstance(title, str) or not title.strip() or not isinstance(note, str):
+            return None
+        if not isinstance(at, int | float) or isinstance(at, bool):
+            return None
+        return Group(group_id, title, note, float(at))
+
     def update(self, card_id: str, change: Callable[[CardRecord | None], CardRecord | None]) -> CardRecord | None:
         """Read, change and write one card under the lock. `change` returns None to write nothing."""
         with self.locked():
@@ -361,9 +451,16 @@ class Store:
                 self.path(card_id).unlink()
         return True, ""
 
-    def close(self, card_ids: list[str], now: float, expected: Mapping[str, int] | None = None) -> list[str]:
+    def close(
+        self,
+        card_ids: list[str],
+        now: float,
+        expected: Mapping[str, int] | None = None,
+        pane_groups: Mapping[str, str] | None = None,
+    ) -> list[str]:
         """Mark open cards closed. Readonly cards are left alone. With `expected` (id -> rev seen when the decision
-        was made), a card that `card set` changed in the meantime is not closed."""
+        was made), a card that `card set` changed in the meantime is not closed. `pane_groups` (id -> group of the
+        card's pane, for a pane that is still there) replaces the remembered `pane_group`."""
         closed: list[str] = []
         if not card_ids:
             return closed
@@ -374,7 +471,8 @@ class Store:
                     continue
                 if expected is not None and card_id in expected and record.rev != expected[card_id]:
                     continue
-                self.write(replace(record, closed_at=now))
+                pane_group = (pane_groups or {}).get(card_id, record.pane_group)
+                self.write(replace(record, closed_at=now, pane_group=pane_group))
                 closed.append(card_id)
         return closed
 
@@ -386,6 +484,16 @@ class Store:
                 record = self.load(card_id)
                 if record is not None and not record.readonly and record.seen_rev < rev:
                     self.write(replace(record, seen_rev=rev))
+
+    def remember_pane_groups(self, pane_groups: Mapping[str, str]) -> None:
+        """Remember the group of each open card's pane (id -> group), so the card stays in it once closed."""
+        if not pane_groups:
+            return
+        with self.locked():
+            for card_id, group in pane_groups.items():
+                record = self.load(card_id)
+                if record is not None and not record.closed and not record.readonly and record.pane_group != group:
+                    self.write(replace(record, pane_group=group))
 
     def prune(self, now: float, keep: int = KEEP_CLOSED, days: float = KEEP_CLOSED_DAYS) -> list[str]:
         """Delete closed cards beyond the newest `keep` or older than `days`."""

@@ -27,7 +27,17 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from .errors import ForbiddenCommand
-from .model import OPTION_ID, OPTION_RESUMED, OPTION_ROLE, OPTION_SHARED_WIDTH, SIDEBAR_ROLE, Pane, Server
+from .model import (
+    OPTION_GROUP,
+    OPTION_ID,
+    OPTION_RESUMED,
+    OPTION_ROLE,
+    OPTION_SHARED_WIDTH,
+    SIDEBAR_ROLE,
+    Pane,
+    Server,
+    valid_group,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -190,12 +200,13 @@ PANE_FIELDS: tuple[str, ...] = (
     "pid",  # the server's pid
     OPTION_ID,
     OPTION_ROLE,
+    OPTION_GROUP,  # read only: you or an integration set it, usually on the session; the pane inherits it
 )
 # Free-text fields can contain anything a user or program puts there, including our separators, so tmux replaces
 # them with "?" before printing (format substitution, `#{s/regex/replacement/:field}`). Numeric and id fields are
 # validated after parsing instead; a record that fails validation is skipped.
 FREE_TEXT_FIELDS: frozenset[str] = frozenset(
-    {"session_name", "pane_current_path", "pane_current_command", "socket_path", OPTION_ID, OPTION_ROLE}
+    {"session_name", "pane_current_path", "pane_current_command", "socket_path", OPTION_ID, OPTION_ROLE, OPTION_GROUP}
 )
 
 
@@ -245,6 +256,7 @@ def parse_panes(output: str) -> list[Pane]:
                 server_pid=_int(v["pid"]),
                 card_id=v[OPTION_ID],
                 role=v[OPTION_ROLE],
+                group=v[OPTION_GROUP] if valid_group(v[OPTION_GROUP]) else "",
             )
         )
     return panes

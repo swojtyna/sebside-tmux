@@ -6,7 +6,10 @@ are skipped when nothing changed.
 
 Towards tmux the sidebar is read-only, except: switch-client / select-window / select-pane to show a card,
 new-session to resume a closed card (argv, no shell, only allowlisted programs, after you confirm), and its own pane
-option `@sebside_role`. It writes card files only to close vanished cards and to remember seen done cards.
+option `@sebside_role`. It writes card files only to close vanished cards, to remember seen done cards and to remember
+the group of a card's pane (so the card stays in that group once closed).
+
+In a session whose `@sebside_group` is set, the sidebar shows only the cards of that group and the group's footer.
 """
 
 from __future__ import annotations
@@ -23,10 +26,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .cards import Board, build, newly_seen, reconcile, server_of
+from .cards import Board, build, newly_seen, pane_groups, reconcile, server_of
 from .errors import SebsideError
 from .log import logger
-from .model import OPTION_ROLE, OPTION_SHARED_WIDTH, SIDEBAR_ROLE, Card, Meter, Pane, State
+from .model import OPTION_ROLE, OPTION_SHARED_WIDTH, SIDEBAR_ROLE, Card, Group, Meter, Pane, State
 from .render import Row, clean, frame_layout, to_ansi
 
 if TYPE_CHECKING:
@@ -124,6 +127,7 @@ class App:
     companion_seen: bool = False  # a non-sidebar pane has shared this window with us at least once
     row_keys: list[str | None] = field(default_factory=list)  # card key under each screen row, as last painted
     meter: Meter | None = None  # the usage meter under the counter, as last read
+    footer: Group | None = None  # the footer of this sidebar's group, as last read
 
     # data --------------------------------------------------------------------------------------------
     def refresh(self) -> None:
@@ -146,12 +150,15 @@ class App:
         records = self.store.load_all()
         gone = reconcile(records, panes, server, self.socket_exists, now)
         seen = newly_seen(records, panes, server)
-        if gone or seen:
+        groups = pane_groups(records, panes, server)
+        if gone or seen or groups:
             closed = self.store.close(gone, now, {card_id: records[card_id].rev for card_id in gone})
             self.store.mark_seen(seen)
-            logger().debug("reconcile closed=%s seen=%s", closed, sorted(seen))
+            self.store.remember_pane_groups(groups)
+            logger().debug("reconcile closed=%s seen=%s groups=%s", closed, sorted(seen), groups)
             records = self.store.load_all()
-        self.board = build(panes, records, self.config, now, self.home)
+        self.board = build(panes, records, self.config, now, self.home, self.group)
+        self.footer = self.store.load_group(self.group) if self.group else None
         keys = [card.key for card in self.board.cards]
         if self.selected_key not in keys:
             self.selected_key = keys[0] if keys else None
@@ -316,6 +323,12 @@ class App:
         self.message = f"resumed in session {name}"
 
     @property
+    def group(self) -> str:
+        """The group of the session this sidebar sits in ("" when it has none, or while the pane is unknown)."""
+        mine = next((pane for pane in self.panes if pane.pane_id == self.own_pane), None)
+        return mine.group if mine else ""
+
+    @property
     def current_session(self) -> str | None:
         """The tmux session this sidebar's own pane lives in (None while the pane is unknown)."""
         mine = next((pane for pane in self.panes if pane.pane_id == self.own_pane), None)
@@ -337,6 +350,7 @@ class App:
             resume_allowed=self.resume_allowed(),
             current_session=self.current_session,
             meter=self.meter,
+            group=self.footer,
         )
         return rows
 
@@ -519,7 +533,7 @@ def _run(app: App, own_pane: str | None) -> int:
     previous_handler = signal.signal(signal.SIGWINCH, resized)
     out = sys.stdout
     last_poll = 0.0
-    last_stamp = -1
+    last_stamp: tuple[int, int] | None = None
     last_paint = ""
     pending = ""
     previous_term = signal.signal(signal.SIGTERM, _exit_on_signal)

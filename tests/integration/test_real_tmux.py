@@ -21,9 +21,10 @@ import pytest
 from sebside import cli
 from sebside.cards import build
 from sebside.config import Config
-from sebside.model import OPTION_ID, OPTION_STATE, State
+from sebside.model import OPTION_GROUP, OPTION_ID, OPTION_STATE, State
 from sebside.store import Store
 from sebside.tmux import Tmux
+from sebside.tui import App
 
 pytestmark = [
     pytest.mark.tmux,
@@ -101,6 +102,19 @@ def test_card_set_end_to_end(server: Server, tmp_path: Path):
     titles = {card.title: card for card in board.live}
     assert titles["Deploy"].state is State.WAITING and titles["Deploy"].session == "alpha"
     assert "beta" in titles
+
+
+def test_card_update_changes_text_only(server: Server, tmp_path: Path):
+    pane = server.tmux("display-message", "-p", "-t", "=alpha:", "#{pane_id}")
+    assert cli.main(["card", "set", "--id", "job", "--state", "done"], env_for(server, tmp_path, pane)) == 0
+    before = Store.from_env(env_for(server, tmp_path)).load("job")
+    assert cli.main(["card", "update", "--id", "job", "--subtitle", "ctx 40%"], env_for(server, tmp_path)) == 0
+    after = Store.from_env(env_for(server, tmp_path)).load("job")
+    assert before is not None and after is not None and after.subtitle == "ctx 40%"
+    assert after.state is State.DONE
+    assert (after.tmux, after.rev, after.updated_at) == (before.tmux, before.rev, before.updated_at)
+    assert server.tmux("show-options", "-pqv", "-t", pane, OPTION_ID) == "job"
+    assert server.tmux("show-options", "-pqv", "-t", pane, OPTION_STATE) == "done"
 
 
 def test_closed_session_is_reconciled_into_history(server: Server, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -387,3 +401,88 @@ def test_close_alone_off_keeps_the_sidebar_and_the_session(server: Server, tmp_p
     assert wait_for(lambda: main_panes(server, window) == [])
     time.sleep(3.5)
     assert sidebar_count(server, window) == 1 and "gamma" in sessions(server)
+
+
+# Groups --------------------------------------------------------------------------------------------------------
+
+
+def test_group_option_on_a_session_is_inherited_by_its_panes(server: Server):
+    server.tmux("set-option", "-t", "alpha", OPTION_GROUP, "g1")
+    server.tmux("split-window", "-d", "-t", "=alpha:", "sleep 600")
+    panes = Tmux.create(server.socket).list_panes()
+    assert panes is not None
+    assert sorted((p.session, p.group) for p in panes) == [("alpha", "g1"), ("alpha", "g1"), ("beta", "")]
+
+
+def grouped_server(server: Server, tmp_path: Path) -> dict[str, str]:
+    """alpha in group g1, beta in group g2, gamma without a group; a card and a closed card in each group."""
+    server.tmux("new-session", "-d", "-s", "gamma", "-x", "100", "-y", "30", "sleep 600")
+    server.tmux("set-option", "-t", "alpha", OPTION_GROUP, "g1")
+    server.tmux("set-option", "-t", "beta", OPTION_GROUP, "g2")
+    for session, card in (("alpha", "one"), ("beta", "two")):
+        pane = server.tmux("display-message", "-p", "-t", f"={session}:", "#{pane_id}")
+        assert cli.main(["card", "set", "--id", card, "--state", "working"], env_for(server, tmp_path, pane)) == 0
+    env = env_for(server, tmp_path)
+    for card, group in (("gone-1", "g1"), ("gone-2", "g2")):
+        assert cli.main(["card", "set", "--id", card, "--state", "done", "--group", group], env) == 0
+        assert cli.main(["card", "clear", "--id", card], env) == 0
+    return env
+
+
+def test_each_sidebar_shows_its_own_group(server: Server, tmp_path: Path):
+    env = grouped_server(server, tmp_path)
+    store = Store.from_env(env)
+    seen: dict[str, tuple[list[str], list[str]]] = {}
+    for session in ("alpha", "beta", "gamma"):
+        own = server.tmux("display-message", "-p", "-t", f"={session}:", "#{pane_id}")
+        app = App(Config(), Tmux.create(server.socket), store, home=str(tmp_path), own_pane=own)
+        app.refresh()
+        live = sorted(card.card_id or card.title for card in app.board.live)
+        seen[session] = (live, sorted(card.card_id for card in app.board.history))
+    assert seen["alpha"] == (["one"], ["gone-1"])
+    assert seen["beta"] == (["two"], ["gone-2"])
+    assert seen["gamma"] == (["gamma", "one", "two"], ["gone-1", "gone-2"])  # no group: everything, as before
+
+
+def sidebar_text(server: Server, window: str) -> str:
+    sidebar = next(line.split()[0] for line in roles_of(server, window) if line.endswith(" sidebar"))
+    return server.tmux("capture-pane", "-p", "-t", sidebar)  # the test harness reads the screen, not sebside
+
+
+def test_real_sidebars_show_their_group_and_footer(server: Server, tmp_path: Path):
+    env = grouped_server(server, tmp_path)
+    assert cli.main(["group", "set", "--id", "g1", "--title", "Backend team", "--note", "review Thu"], env) == 0
+    bin_dir = str(Path(shutil.which("sebside") or REPO / ".venv" / "bin" / "sebside").parent)
+    env |= {"PATH": f"{bin_dir}:{env['PATH']}", "SEBSIDE_BIN": f"{bin_dir}/sebside"}
+    for name in ("XDG_STATE_HOME", "XDG_CONFIG_HOME"):
+        server.tmux("set-environment", "-g", name, env[name])  # the sidebar processes read the same state
+    windows = {s: server.tmux("display-message", "-p", "-t", f"={s}:", "#{window_id}") for s in ("alpha", "gamma")}
+    for window in windows.values():
+        assert cli.main(["open", "--target", window], env) == 0
+    assert wait_for(lambda: "Backend team" in sidebar_text(server, windows["alpha"]))
+    alpha = sidebar_text(server, windows["alpha"])
+    assert "review Thu" in alpha and "gone-1" in alpha
+    assert "beta" not in alpha and "gamma" not in alpha and "gone-2" not in alpha
+    assert wait_for(lambda: "gone-2" in sidebar_text(server, windows["gamma"]))
+    gamma = sidebar_text(server, windows["gamma"])
+    assert "Backend team" not in gamma and "gone-1" in gamma and "alpha" in gamma
+    assert cli.main(["group", "set", "--id", "g1", "--title", "Renamed"], env) == 0
+    assert wait_for(lambda: "Renamed" in sidebar_text(server, windows["alpha"]))  # the dir stamp
+
+
+def test_real_sidebar_redraws_after_card_update(server: Server, tmp_path: Path):
+    pane = server.tmux("display-message", "-p", "-t", "=alpha:", "#{pane_id}")
+    set_ = ["card", "set", "--id", "job", "--state", "working", "--title", "Deploy"]
+    assert cli.main(set_, env_for(server, tmp_path, pane)) == 0
+    env = env_for(server, tmp_path)
+    bin_dir = str(Path(shutil.which("sebside") or REPO / ".venv" / "bin" / "sebside").parent)
+    env |= {"PATH": f"{bin_dir}:{env['PATH']}", "SEBSIDE_BIN": f"{bin_dir}/sebside"}
+    for name in ("XDG_STATE_HOME", "XDG_CONFIG_HOME"):
+        server.tmux("set-environment", "-g", name, env[name])  # the sidebar process reads the same state
+    window = server.tmux("display-message", "-p", "-t", "=alpha:", "#{window_id}")
+    assert cli.main(["open", "--target", window], env) == 0
+    assert wait_for(lambda: "Deploy" in sidebar_text(server, window))
+    assert "step 3 of 5" not in sidebar_text(server, window)
+    assert cli.main(["card", "update", "--id", "job", "--subtitle", "step 3 of 5"], env) == 0
+    assert wait_for(lambda: "step 3 of 5" in sidebar_text(server, window))
+    assert "Deploy" in sidebar_text(server, window)

@@ -229,3 +229,70 @@ def test_open_without_target_outside_tmux_is_a_usage_error(fake, env):
 
 def test_open_reports_an_unknown_window(fake, in_tmux):
     assert cli.main(["open", "--if-missing", "--target", "@9"], in_tmux) == EXIT_TMUX
+
+
+# card update -------------------------------------------------------------------------------------
+def test_update_changes_only_the_given_text(fake, in_tmux, capsys):
+    cli.main(["card", "set", "--id", "j", "--state", "done", "--title", "Build", "--subtitle", "old"], in_tmux)
+    store_of(in_tmux).mark_seen({"j": 1})
+    before = store_of(in_tmux).load("j")
+    calls = len(fake.calls)
+    options = dict(fake.pane("%4").options)
+    capsys.readouterr()
+    assert cli.main(["card", "update", "--id", "j", "--subtitle", "new\nline", "--extra", "3/5"], in_tmux) == 0
+    after = store_of(in_tmux).load("j")
+    assert before is not None and after is not None
+    assert (after.subtitle, after.extra, after.title) == ("new line", "3/5", "Build")
+    unchanged = ("state", "tmux", "rev", "updated_at", "seen_rev", "closed_at", "cwd", "resume", "group", "created_at")
+    assert all(getattr(after, name) == getattr(before, name) for name in unchanged)
+    assert fake.calls[calls:] == [] and fake.pane("%4").options == options  # tmux is not called at all
+    assert "j: updated subtitle, extra (rev 1)" in capsys.readouterr().out
+
+
+def test_update_from_outside_tmux_keeps_the_card_on_its_pane(fake, in_tmux, env):
+    cli.main(["card", "set", "--id", "j", "--state", "working"], in_tmux)
+    assert cli.main(["card", "update", "--id", "j", "--desc", "step 2"], env) == 0
+    record = store_of(env).load("j")
+    assert record is not None and record.tmux is not None and record.tmux.pane == "%4" and record.desc == "step 2"
+
+
+def test_update_of_a_missing_card_is_a_usage_error_and_writes_nothing(fake, env, capsys):
+    assert cli.main(["card", "update", "--id", "nope", "--subtitle", "x"], env) == EXIT_USAGE
+    assert "no card 'nope'" in capsys.readouterr().err
+    assert store_of(env).load("nope") is None
+
+
+def test_update_without_text_is_a_usage_error(fake, in_tmux):
+    cli.main(["card", "set", "--id", "j", "--state", "working"], in_tmux)
+    assert cli.main(["card", "update", "--id", "j"], in_tmux) == EXIT_USAGE
+    with pytest.raises(SystemExit) as refused:  # argparse: --state is not a flag of update
+        cli.main(["card", "update", "--id", "j", "--state", "done"], in_tmux)
+    assert refused.value.code == EXIT_USAGE
+
+
+def test_update_keeps_a_seen_done_card_seen(fake, in_tmux):
+    from sebside.cards import build
+    from sebside.config import Config
+    from sebside.tmux import parse_panes
+
+    cli.main(["card", "set", "--id", "j", "--state", "done"], in_tmux)
+    store_of(in_tmux).mark_seen({"j": 1})
+    cli.main(["card", "update", "--id", "j", "--subtitle", "ctx 40%"], in_tmux)
+    panes = parse_panes(fake(["tmux", "list-panes"], 1.0).stdout)
+    records = store_of(in_tmux).load_all()
+    card = build(panes, records, Config(), records["j"].updated_at + 1).live[0]
+    assert card.seen and card.state is State.QUIET and card.subtitle == "ctx 40%"
+
+
+def test_update_refuses_a_newer_schema_card(fake, env):
+    store = store_of(env)
+    store.ensure_dir()
+    store.path("new").write_text(json.dumps({"schema": 99, "id": "new", "state": "working"}))
+    assert cli.main(["card", "update", "--id", "new", "--desc", "x"], env) == EXIT_STATE
+
+
+def test_set_without_state_is_still_a_usage_error(fake, in_tmux):
+    with pytest.raises(SystemExit) as refused:
+        cli.main(["card", "set", "--id", "j", "--subtitle", "x"], in_tmux)
+    assert refused.value.code == EXIT_USAGE
+    assert store_of(in_tmux).load("j") is None
