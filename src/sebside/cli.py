@@ -113,7 +113,9 @@ def _parser() -> argparse.ArgumentParser:
     meter_set.add_argument("--label", required=True, help="short name, e.g. week")
     meter_set.add_argument("--percent", required=True, type=int, help="0..100")
     meter_set.add_argument("--note", default="", help="second line, e.g. when the limit resets")
-    meter.add_parser("clear", parents=[common], help="remove the meter")
+    meter_set.add_argument("--session", help="only sidebars in this tmux session show it (instead of the shared one)")
+    meter_clear = meter.add_parser("clear", parents=[common], help="remove the meter")
+    meter_clear.add_argument("--session", help="remove only this session's meter")
 
     group = commands.add_parser("group", help="set or clear the footer of a group's sidebars").add_subparsers(
         dest="group", required=True
@@ -484,12 +486,12 @@ def run_meter_set(ctx: Context, args: argparse.Namespace) -> int:
     label = _one_line(args.label, 16)
     if not label:
         raise UsageError("--label must not be empty")
-    ctx.store.write_meter(Meter(label, args.percent, _one_line(args.note, 60), ctx.now))
+    ctx.store.write_meter(Meter(label, args.percent, _one_line(args.note, 60), ctx.now), args.session)
     return EXIT_OK
 
 
 def run_meter_clear(ctx: Context, args: argparse.Namespace) -> int:
-    ctx.store.clear_meter()
+    ctx.store.clear_meter(args.session)
     return EXIT_OK
 
 

@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `sebside meter set --session NAME …` / `sebside meter clear --session NAME`: a usage meter for the sidebars of one
+  tmux session, shown there instead of the shared meter (e.g. one tool's quota in its own session while every other
+  session keeps the shared one). Stored in `meters/<name>.json` (atomic, 0600); a session without one shows the shared
+  meter as before.
 - Groups: a sidebar in a session whose `@sebside_group` is set (by you or an integration, e.g.
   `tmux set-option -t api @sebside_group backend`; sebside never writes it) shows only that group's live,
   default and recently closed cards. Sidebars in sessions without the option show everything, as before. `card set`

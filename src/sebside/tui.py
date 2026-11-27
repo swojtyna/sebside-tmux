@@ -139,11 +139,13 @@ class App:
             self.message = f"refresh failed: {clean(str(error))}"
 
     def _refresh(self) -> None:
-        self.meter = self.store.load_meter()
         panes = self.tmux.list_panes()
         if panes is None:
+            self.meter = self.store.load_meter()
             self.message = "tmux did not answer; showing the last known cards"
             return
+        mine = next((pane for pane in panes if pane.pane_id == self.own_pane), None)
+        self.meter = self.store.load_meter(mine.session if mine else None)
         now = self.clock()
         self.panes = panes
         server = server_of(panes)

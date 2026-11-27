@@ -314,32 +314,51 @@ class Store:
     def meter_path(self) -> Path:
         return self.root / "meter.json"
 
-    def write_meter(self, meter: Meter) -> None:
-        """Atomic write of the usage meter (temporary file + rename, 0600)."""
+    def session_meter_path(self, session: str) -> Path:
+        """`meters/<session>.json`: the meter that sidebars in one tmux session show instead of `meter.json`."""
+        if not valid_group(session):
+            raise StateError(
+                f"{session!r} is not a session name sebside keeps a meter for: use letters, digits, '.', '_' and '-'"
+            )
+        return self.root / "meters" / group_file_name(session)
+
+    def write_meter(self, meter: Meter, session: str | None = None) -> None:
+        """Atomic write of the usage meter (temporary file + rename, 0600); with `session`, that session's meter."""
+        target = self.session_meter_path(session) if session else self.meter_path
         self.ensure_dir()
-        descriptor, temporary = tempfile.mkstemp(prefix=".meter-", suffix=".tmp", dir=self.root)
+        if session:
+            _private_dir(target.parent)
+        descriptor, temporary = tempfile.mkstemp(prefix=".meter-", suffix=".tmp", dir=target.parent)
         try:
             os.fchmod(descriptor, 0o600)
             data = {"label": meter.label, "percent": meter.percent, "note": meter.note, "at": meter.at}
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, ensure_ascii=False)
-            Path(temporary).replace(self.meter_path)
+            Path(temporary).replace(target)
         except OSError as error:
             with contextlib.suppress(OSError):
                 Path(temporary).unlink()
-            raise StateError(f"cannot write {self.meter_path}: {error.strerror}") from None
+            raise StateError(f"cannot write {target}: {error.strerror}") from None
 
-    def clear_meter(self) -> bool:
+    def clear_meter(self, session: str | None = None) -> bool:
         try:
-            self.meter_path.unlink()
+            (self.session_meter_path(session) if session else self.meter_path).unlink()
         except FileNotFoundError:
             return False
         return True
 
-    def load_meter(self) -> Meter | None:
-        """The usage meter; None when missing, not a regular file owned by us, or not valid."""
+    def load_meter(self, session: str | None = None) -> Meter | None:
+        """The usage meter; with `session`, that session's meter when it has one, else the shared one. None when
+        missing, not a regular file owned by us, or not valid."""
+        if session and valid_group(session):
+            own = self._read_meter(self.session_meter_path(session))
+            if own is not None:
+                return own
+        return self._read_meter(self.meter_path)
+
+    def _read_meter(self, path: Path) -> Meter | None:
         try:
-            descriptor = os.open(self.meter_path, os.O_RDONLY | os.O_NOFOLLOW)
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError:
             return None
         try:

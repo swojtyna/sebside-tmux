@@ -112,6 +112,8 @@ sebside card update --id ID [--title T] [--subtitle S] [--desc D] [--extra E]   
 sebside card clear [--id ID] [--forget]   # close the card (keep it in history unless --forget)
 sebside meter set --label week --percent 47 --note "resets Fri 11:00"   # usage meter under the counter
 sebside meter clear
+sebside meter set --session gemini --label 5h --percent 3 --note "resets 05:15"   # only sidebars in session gemini
+sebside meter clear --session gemini      # that session falls back to the shared meter
 sebside group set --id ID --title TEXT [--note TEXT]   # footer of the sidebars of one group (see Groups)
 sebside group clear --id ID
 sebside card list [--group ID]            # live and recently closed cards as JSON (only one group's with --group)
@@ -308,7 +310,7 @@ move the selection. Clicks on empty rows, the footer or the "recently closed" he
 **Which card is my session?** The card of the session this sidebar sits in has a bold `●` at the right end of its
 second line, in the card's state colour. It is separate from the selection, which only moves with keys or the mouse.
 
-**Where is my data?** Only in `~/.local/state/sebside/` (`cards/`, `groups/`, `meter.json`) and in your tmux pane
+**Where is my data?** Only in `~/.local/state/sebside/` (`cards/`, `groups/`, `meter.json`, `meters/`) and in your tmux pane
 options. Nothing leaves your machine.
 
 **How do I remove it?** Run `sebside uninstall`, remove the plugin line from `tmux.conf`, then
