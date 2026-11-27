@@ -1,0 +1,30 @@
+# Tests over 0.04 s when the limit came in. Remove a line once the test is fast; never add one.
+tests/integration/test_real_tmux.py::test_auto_default_is_off
+tests/integration/test_real_tmux.py::test_auto_off_removes_the_hooks_and_nothing_opens
+tests/integration/test_real_tmux.py::test_auto_on_installs_hooks_at_fixed_indexes_and_reload_is_idempotent
+tests/integration/test_real_tmux.py::test_auto_on_opens_the_sidebar_in_new_sessions_and_windows
+tests/integration/test_real_tmux.py::test_card_set_end_to_end
+tests/integration/test_real_tmux.py::test_card_update_changes_text_only
+tests/integration/test_real_tmux.py::test_close_alone_off_keeps_the_sidebar_and_the_session
+tests/integration/test_real_tmux.py::test_closed_session_is_reconciled_into_history
+tests/integration/test_real_tmux.py::test_each_sidebar_shows_its_own_group
+tests/integration/test_real_tmux.py::test_focus_main_after_switch_lands_in_the_main_pane
+tests/integration/test_real_tmux.py::test_group_option_on_a_session_is_inherited_by_its_panes
+tests/integration/test_real_tmux.py::test_hook_works_with_quote_space_and_hash_in_the_sebside_path
+tests/integration/test_real_tmux.py::test_invalid_width_option_falls_back_to_default
+tests/integration/test_real_tmux.py::test_open_if_missing_opens_once_and_is_quiet
+tests/integration/test_real_tmux.py::test_plugin_installs_hook_and_key_and_toggles_sidebar
+tests/integration/test_real_tmux.py::test_real_sidebar_redraws_after_card_update
+tests/integration/test_real_tmux.py::test_real_sidebars_show_their_group_and_footer
+tests/integration/test_real_tmux.py::test_resume_argv_runs_without_shell
+tests/integration/test_real_tmux.py::test_session_closed_hook_really_closes_the_card
+tests/integration/test_real_tmux.py::test_sidebar_and_session_end_when_the_main_pane_exits
+tests/integration/test_real_tmux.py::test_sidebar_stays_while_another_main_pane_lives
+tests/integration/test_real_tmux.py::test_uninstall_removes_hook_key_and_sidebar
+tests/unit/test_plugin_script.py::test_new_or_unnumbered_versions_pass_the_check[tmux 3.0a]
+tests/unit/test_plugin_script.py::test_new_or_unnumbered_versions_pass_the_check[tmux 3.4]
+tests/unit/test_plugin_script.py::test_new_or_unnumbered_versions_pass_the_check[tmux master]
+tests/unit/test_plugin_script.py::test_new_or_unnumbered_versions_pass_the_check[tmux next-3.6]
+tests/unit/test_plugin_script.py::test_new_or_unnumbered_versions_pass_the_check[tmux openbsd-7.5]
+tests/unit/test_plugin_script.py::test_old_versions_are_refused[tmux 1.8]
+tests/unit/test_plugin_script.py::test_old_versions_are_refused[tmux 2.9a]

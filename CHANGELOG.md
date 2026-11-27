@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Tests: one test, setup and teardown included, takes at most 0.04 s; `tests/conftest.py` fails a slower one
+  (old slow tests listed in `tests/slow_tests_debt.txt`, a list that only shrinks).
+
 ### Added
 
 - `sebside meter set --session NAME …` / `sebside meter clear --session NAME`: a usage meter for the sidebars of one

@@ -5,7 +5,10 @@ Thanks for helping. Small, focused pull requests are easiest to review.
 1. `uv sync`
 2. Make your change with a test. Pure logic (parsing, merging, rendering) gets a unit test in `tests/unit/`;
    anything that needs real tmux goes to `tests/integration/` with `@pytest.mark.tmux` and a private tmux server
-   (never the default one).
+   (never the default one). One test, setup and teardown included, takes at most 0.04 s (`tests/conftest.py`
+   fails a slower one): a slow test is overbuilt, so test the logic as a pure function on small data, put tmux behind
+   the fake server (`tests/fakes.py`) and inject the clock instead of sleeping. Old slow tests are listed in
+   `tests/slow_tests_debt.txt`; that list only shrinks.
 3. Run `uv run pytest`, `uv run ruff check`, `uv run ruff format --check` and `uv run mypy`.
 4. Add a line under `[Unreleased]` in `CHANGELOG.md`.
 
