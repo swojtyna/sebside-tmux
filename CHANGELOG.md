@@ -69,6 +69,8 @@ All notable changes to this project are documented here. The format follows
   tmux on the paths sebside uses (sessions, panes, options, environment, hooks, key bindings, formats, `run-shell`);
   the bash scripts still run for real. The real-tmux versions stay as a by-hand check in `tests/manual/real_tmux.py`.
 - The sidebar's poll timing lives in `tui.Poller`, with the clock as a parameter, so it is tested without waiting.
+- `cli` builds its argument parser once per process (repeated in-process `cli.main` calls, as in the tests, no
+  longer rebuild it). CI no longer installs tmux: the suite does not need it.
 
 ## [0.2.0] - 2026-11-18
 

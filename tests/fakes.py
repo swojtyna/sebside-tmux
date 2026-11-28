@@ -793,5 +793,5 @@ def run_script(
     finally:
         os.close(request_read)
         os.close(reply_write)
-        out, err = process.communicate(timeout=10)
+        out, err = process.communicate()  # blocking wait: a timeout would make Popen.wait poll with time.sleep
     return Completed(process.returncode, out.decode(), err.decode())

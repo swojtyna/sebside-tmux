@@ -5,6 +5,7 @@ errors map to exit codes (see errors.py)."""
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -57,6 +58,7 @@ Command = Callable[[Context, argparse.Namespace], int]
 
 
 # parser ------------------------------------------------------------------------------------------
+@functools.cache  # built once per process: parse_args never changes the parser, and building it is most of a call
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sebside", description="A tmux sidebar of cards, one per session or task.")
     parser.add_argument("--version", action="version", version=f"sebside {__version__}")
