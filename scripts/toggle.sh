@@ -16,7 +16,13 @@ if [ -z "$sebside" ]; then
 fi
 
 window="$(tmux display-message -p -t "$pane" '#{window_id}')"
-existing="$(tmux list-panes -t "$window" -F '#{pane_id} #{@sebside_role}' | awk '$2 == "sidebar" { print $1; exit }')"
+# Built-ins only (no awk/sed process), so the key answers fast.
+existing=""
+while read -r id role _; do
+    if [ "$role" = "sidebar" ]; then existing="$id"; break; fi
+done <<PANES
+$(tmux list-panes -t "$window" -F '#{pane_id} #{@sebside_role}')
+PANES
 if [ -n "$existing" ]; then
     tmux kill-pane -t "$existing"
     exit 0
@@ -37,6 +43,11 @@ case "$width" in
        [ "$width" -lt 10 ] && width=10 ;;
 esac
 
-quoted="'$(printf '%s' "$sebside" | sed "s/'/'\\\\''/g")'"
+rest="$sebside" quoted=""
+while [[ "$rest" == *"'"* ]]; do
+    quoted="$quoted${rest%%"'"*}'\\''"
+    rest="${rest#*"'"}"
+done
+quoted="'$quoted$rest'"
 new="$(tmux split-window -hb -f -l "$width" -t "$pane" -P -F '#{pane_id}' "$quoted sidebar")"
 [ -n "$new" ] && tmux set-option -p -t "$new" @sebside_role sidebar

@@ -9,7 +9,7 @@ from sebside.model import OPTION_ID, Meter, State
 from sebside.render import to_plain
 from sebside.store import Store
 from sebside.tmux import Tmux
-from sebside.tui import App, decode_keys, paint, session_name, split_pending
+from sebside.tui import App, Poller, decode_keys, paint, session_name, split_pending
 
 
 @pytest.fixture
@@ -448,3 +448,25 @@ def test_meter_sits_under_the_counter_in_the_sidebar(server, app, store):
     week = next(index for index, row in enumerate(painted) if row.startswith("week "))
     assert "resets Thu 11:00" in painted[week + 1]
     assert "waiting" in painted[week - 1] or "nothing needs you" in painted[week - 1] or "working" in painted[week - 1]
+
+
+# poll timing --------------------------------------------------------------------------------------------------
+def test_poller_polls_at_once_then_every_refresh_or_when_a_card_file_changes(server, app, store):
+    server.panes.append(FakePane("%1", "api"))
+    now = [100.0]
+    poller = Poller(app, monotonic=lambda: now[0])
+
+    def step() -> int:
+        if poller.due():
+            poller.poll()
+        return server.commands().count("list-panes")
+
+    assert step() == 1  # the first check polls
+    now[0] += 0.5
+    assert step() == 1  # not due yet, nothing changed
+    store.write(record("x"))
+    assert step() == 2  # a card file changed: at once
+    now[0] += app.config.refresh_seconds
+    assert step() == 3  # due
+    poller.poll_now()
+    assert step() == 4  # forced (after Enter or a click)

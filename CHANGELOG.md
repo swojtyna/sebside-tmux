@@ -8,8 +8,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- Tests: one test, setup and teardown included, takes at most 0.04 s; `tests/conftest.py` fails a slower one
-  (old slow tests listed in `tests/slow_tests_debt.txt`, a list that only shrinks).
+- The plugin scripts (`sebside.tmux`, `scripts/toggle.sh`) quote and search with bash built-ins instead of starting
+  `sed`, `awk` and `dirname`, so loading the plugin and the toggle key are faster. Output is the same (hooks and key
+  binding checked byte for byte against the previous version on a real tmux).
 
 ### Added
 
@@ -58,6 +59,16 @@ All notable changes to this project are documented here. The format follows
   from where the cursor is. 
 - A running sidebar restarts itself (same pane, same arguments) a few seconds after sebside is upgraded, so old
   sidebars no longer stay keyboard-only. Mouse mode is re-sent on every repaint; mouse modifier bits are ignored.
+
+### Internal
+
+- Every test may use at most 0.04 s of CPU (setup, test and teardown); `tests/conftest.py` enforces it, forbids
+  `time.sleep` in tests and keeps a debt list (`tests/slow_tests_debt.txt`) that only shrinks and is now empty.
+  The suite runs in under a second.
+- The real-tmux integration tests run against `TmuxWorld`, a fake tmux in `tests/fakes.py` that behaves like real
+  tmux on the paths sebside uses (sessions, panes, options, environment, hooks, key bindings, formats, `run-shell`);
+  the bash scripts still run for real. The real-tmux versions stay as a by-hand check in `tests/manual/real_tmux.py`.
+- The sidebar's poll timing lives in `tui.Poller`, with the clock as a parameter, so it is tested without waiting.
 
 ## [0.2.0] - 2026-11-18
 

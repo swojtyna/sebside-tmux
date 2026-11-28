@@ -75,3 +75,5 @@ Where the code deliberately differs from, or narrows, the rules above:
   fields. `pane_group` is the group of the card's pane when the sidebar or `reconcile` last saw it (written only when
   it changes, for cards without a group of their own), so a closed card stays in the group its pane last had.
 - Rule 17 (groups): the frame-tick check covers the mtime of `groups/` as well, so a `group set` shows at once.
+- Rule 22: since 0.2.x `tests/integration` runs against `TmuxWorld` (a fake tmux in `tests/fakes.py`) so every test
+  stays under 0.04 s of CPU; the real-tmux scenarios are a by-hand check in `tests/manual/real_tmux.py`.

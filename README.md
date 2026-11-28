@@ -321,8 +321,8 @@ options. Nothing leaves your machine.
 
 ```sh
 uv sync
-uv run pytest                 # integration tests need tmux and run on a private tmux server
-uv run pytest -m "not tmux"   # unit tests only
+uv run pytest                 # every test, no tmux needed; each test may use at most 0.04 s of CPU
+uv run pytest --noconftest tests/manual/real_tmux.py   # by hand: the same scenarios on a real, private tmux server
 uv run ruff check && uv run ruff format --check
 uv run mypy
 scripts/demo.sh               # try the sidebar on a private tmux server with demo cards

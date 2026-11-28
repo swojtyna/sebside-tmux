@@ -1,4 +1,6 @@
-"""Integration tests against a real tmux binary on a private server.
+"""By-hand check against a real tmux binary on a private server (not part of the suite; it waits for real hooks and
+refreshes, so it is far over the per-test CPU limit). Run: `uv run pytest --noconftest tests/manual/real_tmux.py`.
+The same scenarios run fast in the suite against the fake tmux: `tests/integration/test_end_to_end.py`.
 
 Every test starts its own server on a socket in a short temporary directory (`tmux -S <dir>/s -f /dev/null`) and
 kills only that server afterwards. The user's default tmux server is never contacted: `TMUX` is removed from the

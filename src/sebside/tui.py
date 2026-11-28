@@ -506,6 +506,31 @@ class _Resized:
         self.flag = True
 
 
+@dataclass
+class Poller:
+    """When the sidebar polls: every `refresh_seconds`, and at once when a card file changed. The clock is a parameter
+    so the timing can be tested without waiting."""
+
+    app: App
+    monotonic: Callable[[], float] = time.monotonic
+    last_poll: float | None = None  # None: poll on the next check
+    last_stamp: tuple[int, int] | None = None
+
+    def due(self) -> bool:
+        if self.last_poll is None or self.monotonic() - self.last_poll >= self.app.config.refresh_seconds:
+            return True
+        return self.app.store.dir_stamp() != self.last_stamp
+
+    def poll(self) -> bool:
+        """Refresh from tmux and the card files. Returns True when the sidebar must close itself (`App.alone`)."""
+        self.app.refresh()
+        self.last_poll, self.last_stamp = self.monotonic(), self.app.store.dir_stamp()
+        return self.app.alone()
+
+    def poll_now(self) -> None:
+        self.last_poll = None
+
+
 def run(app: App, own_pane: str | None = None) -> int:
     code = _run(app, own_pane)
     if app.reload:
@@ -534,8 +559,7 @@ def _run(app: App, own_pane: str | None) -> int:
     resized = _Resized()
     previous_handler = signal.signal(signal.SIGWINCH, resized)
     out = sys.stdout
-    last_poll = 0.0
-    last_stamp: tuple[int, int] | None = None
+    poller = Poller(app)
     last_paint = ""
     pending = ""
     previous_term = signal.signal(signal.SIGTERM, _exit_on_signal)
@@ -546,11 +570,8 @@ def _run(app: App, own_pane: str | None) -> int:
         out.write("\x1b[?1049h\x1b[?25l\x1b[2J" + MOUSE_ON)
         out.flush()
         while True:
-            stamp = app.store.dir_stamp()
-            if time.monotonic() - last_poll >= app.config.refresh_seconds or stamp != last_stamp:
-                app.refresh()
-                last_poll, last_stamp = time.monotonic(), app.store.dir_stamp()
-                if app.alone():
+            if poller.due():
+                if poller.poll():
                     return 0
                 widths.tick(
                     app.tmux,
@@ -586,7 +607,7 @@ def _run(app: App, own_pane: str | None) -> int:
                 if not app.handle_key(key):
                     return 0
                 if key in ("enter", "yes", "forget") or key.startswith(CLICK):
-                    last_poll = 0.0  # show the effect at once
+                    poller.poll_now()  # show the effect at once
     except KeyboardInterrupt:
         return 0
     finally:

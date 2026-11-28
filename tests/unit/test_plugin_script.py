@@ -1,27 +1,24 @@
-"""sebside.tmux against a fake `tmux` on PATH (no tmux server involved)."""
+"""The plugin's tmux version check: sebside.tmux runs in real bash, `tmux` is answered by the fake (no tmux server,
+no executable written, so each row takes a few milliseconds)."""
 
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+from fakes import TmuxWorld, run_script
 
 REPO = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
 
 
 def run_plugin(tmp_path: Path, version: str) -> str:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log = tmp_path / "calls.log"
-    fake = bin_dir / "tmux"
-    fake.write_text(
-        f'#!/bin/sh\nif [ "$1" = "-V" ]; then echo "{version}"; exit 0; fi\nprintf "%s\\n" "$*" >> "{log}"\n'
-    )
-    fake.chmod(0o755)
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path)}
-    subprocess.run(["bash", str(REPO / "sebside.tmux")], env=env, check=True, timeout=20)
-    return log.read_text() if log.exists() else ""
+    """Messages the plugin shows (display-message) when loaded with `tmux -V` printing `version`."""
+    world = TmuxWorld(str(tmp_path / "s"), version=version)
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "TMUX": f"{world.socket},{world.pid},0"}
+    done = run_script(world, REPO / "sebside.tmux", env=env)
+    assert done.ok, done.stderr
+    return "\n".join(world.messages)
 
 
 @pytest.mark.parametrize("version", ["tmux 3.4", "tmux 3.0a", "tmux next-3.6", "tmux master", "tmux openbsd-7.5"])
